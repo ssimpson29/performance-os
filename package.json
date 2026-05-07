@@ -1,0 +1,18 @@
+{
+  "name": "performance-os",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @performance-os/web",
+    "build": "npm run build --workspace @performance-os/web",
+    "lint": "npm run lint --workspace @performance-os/web",
+    "typecheck": "npm run typecheck --workspace @performance-os/web"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

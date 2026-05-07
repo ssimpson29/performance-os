@@ -1,0 +1,60 @@
+# Dependencies / build outputs
+node_modules
+.next
+out
+coverage
+dist
+build
+npm-debug.log*
+
+# Secrets / local env
+.env*
+!.env.example
+
+# Python
+.venv
+__pycache__/
+*.pyc
+
+# Supabase / OS
+.supabase
+.DS_Store
+
+# Agent/editor local metadata
+.adal/
+.agents/
+.aider-desk/
+.augment/
+.bob/
+.claude/
+.codeartsdoer/
+.codebuddy/
+.codemaker/
+.codestudio/
+.commandcode/
+.continue/
+.cortex/
+.crush/
+.devin/
+.factory/
+.forge/
+.iflow/
+.junie/
+.kilocode/
+.kiro/
+.kode/
+.mcpjam/
+.mux/
+.neovate/
+.openhands/
+.pi/
+.pochi/
+.qoder/
+.qwen/
+.roo/
+.rovodev/
+.tabnine/
+.trae/
+.vibe/
+.windsurf/
+.zencoder/
