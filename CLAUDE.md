@@ -100,6 +100,7 @@ npm run test --workspace @performance-os/web   # vitest run
   - `POST /api/imports/apple-health`
   - `GET  /api/imports/oura/connect`
   - `POST /api/sync/oura`
+  - `POST /api/coach/message`
 - **Intentional exception:** `POST /api/imports/apple-health/push`
   uses signed URL + HMAC signature for iPhone Shortcut automation. Do
   NOT convert to cookie auth. The signed URL itself is the credential.
@@ -170,22 +171,23 @@ The training plan defines weekly structure baseline. The coach adapts daily work
 - `training_plans` now persists `end_date`, `goal`, `metadata.weeklyStructure`, `metadata.phaseBlocks`, `metadata.supportTemplates`, and (when supplied) `metadata.raceContext`.
 - Race-aware adaptive coach (Open Work #3) is built on this foundation.
 
-### 3. Race-aware adaptive coach — deterministic core done, LLM layer remains
-- **Done.** `apps/web/lib/training-plan/adaptive-coach.ts` now exposes
+### 3. Race-aware adaptive coach — done (2026-05-21)
+- **Deterministic core** in `apps/web/lib/training-plan/adaptive-coach.ts`:
   `computePhasePosition`, `computeRecoveryTrend`, `computePerformanceDelta`,
-  and an extended `adaptWeeklyStructure` that layers race-phase awareness,
+  and a layered `adaptWeeklyStructure` that handles race-phase awareness,
   adapt-up on healthy over-performance, adapt-down on lagging
-  adherence / degraded recovery, race-week lock, and taper guards on
-  top of the existing weekend-overload heuristic. See worked examples
-  1, 2, and 4 in `docs/two-coach-architecture.md`.
-- **Remaining: conversational injury management** (worked example 3 in
-  `docs/two-coach-architecture.md`). Lives in the LLM Training Coach
-  service at `apps/web/lib/agents/training-coach.ts` (not yet built).
-  Must ask follow-up questions on strain/injury reports, use the
-  deterministic `coachFollowUp` window persistence, schedule the
-  re-evaluation prompt on `checkInDate`, and return to the normal
-  plan when athlete responses indicate recovery — using the
-  positive-recovery-phrase-before-negative ordering from pitfall #1.
+  adherence / degraded recovery, race-week lock, and taper guards.
+- **LLM Training Coach service** in `apps/web/lib/agents/training-coach.ts`:
+  wraps the deterministic engine with athlete-facing narrative, deterministic
+  fallback when `AI_COACH_*` env is missing, conversational injury detection
+  (positive-recovery phrase check before negative, per pitfall #1),
+  `coachFollowUp` window open/close, and 20-message conversation memory.
+- **API surface:** `POST /api/coach/message` (auth-scoped) — accepts
+  an athlete message, runs the deterministic engine via the data loader,
+  composes the coach reply via the LLM service, and persists the run
+  to `daily_summaries.summary` (merging without clobbering longevityContext
+  or other future cross-write keys). Injury detections insert a
+  `health_events` row with `metadata.source = 'coach_message'`.
 
 ### 4. Plan docs index (existing)
 - `docs/plans/2026-05-04-training-import-and-adaptive-coach.md`
