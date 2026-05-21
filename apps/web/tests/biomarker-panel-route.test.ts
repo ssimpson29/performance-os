@@ -145,6 +145,13 @@ describe('POST /api/imports/biomarker-panel', () => {
     expect(rows[0].reference_high).toBe(130);
     expect(rows[0].optimal_high).toBe(80);
     expect(rows[0].status).toBe('in_range');
+    expect(rows[0].metadata).toBeUndefined(); // marker-row metadata is per-result, not the lab panel
+
+    // The lab_panels insert should also carry source + importedAt metadata.
+    const panelInsert = calls.find((c) => c.table === 'lab_panels' && c.method === 'insert');
+    const panelPayload = panelInsert!.payload as { metadata: Record<string, unknown> };
+    expect(panelPayload.metadata).toMatchObject({ source: 'json_upload', markerCount: 2 });
+    expect(typeof panelPayload.metadata.importedAt).toBe('string');
   });
 
   it('returns 400 when panelDate is missing or malformed', async () => {

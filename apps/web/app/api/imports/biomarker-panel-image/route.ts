@@ -6,9 +6,11 @@ import {
   type ExtractedBiomarker,
 } from '@/lib/longevity/image-extraction';
 import { getMarkerSpec } from '@/lib/longevity/reference-ranges';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { getAuthenticatedUserId } from '@/lib/server-auth';
 
 const SUPPORTED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10MB
 
 type ReviewMarker = {
   rawName: string;
@@ -32,6 +34,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  const rate = checkRateLimit({ key: `biomarker-image:${userId}`, limit: 3, windowMs: 60_000 });
+  if (!rate.ok) {
+    return NextResponse.json(
+      { error: 'Image extraction is rate-limited. Try again shortly.', retryAfterMs: rate.retryAfterMs },
+      { status: 429, headers: { 'Retry-After': String(Math.ceil(rate.retryAfterMs / 1000)) } },
+    );
+  }
+
   const formData = await request.formData().catch(() => null);
   if (!formData) {
     return NextResponse.json({ error: 'Expected multipart/form-data body' }, { status: 400 });
@@ -44,6 +54,16 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { error: `Unsupported MIME type '${file.type}'. Supported: ${[...SUPPORTED_MIME].join(', ')}.` },
       { status: 400 },
+    );
+  }
+  if (file.size > MAX_IMAGE_BYTES) {
+    return NextResponse.json(
+      {
+        error: `Image exceeds the ${Math.round(MAX_IMAGE_BYTES / (1024 * 1024))}MB upload limit. Compress or reshoot the lab report and try again.`,
+        actualBytes: file.size,
+        maxBytes: MAX_IMAGE_BYTES,
+      },
+      { status: 413 },
     );
   }
 

@@ -87,6 +87,11 @@ export async function POST(request: Request) {
       provider: body.provider ?? null,
       panel_name: body.panelName ?? null,
       notes: body.notes ?? null,
+      metadata: {
+        source: 'json_upload',
+        importedAt: new Date().toISOString(),
+        markerCount: validated.length,
+      },
     })
     .select('id')
     .single();

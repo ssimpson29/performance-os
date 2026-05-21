@@ -141,3 +141,53 @@ describe('POST /api/imports/biomarker-panel-image', () => {
     expect(data.warnings.some((w) => /panel date/i.test(w))).toBe(true);
   });
 });
+
+
+describe('POST /api/imports/biomarker-panel-image — limits', () => {
+  beforeEach(async () => {
+    vi.resetAllMocks();
+    const { resetRateLimitStore } = await import('../lib/rate-limit');
+    resetRateLimitStore();
+  });
+
+  it('returns 413 when the image exceeds the 10MB ceiling', async () => {
+    getAuthenticatedUserId.mockResolvedValue('athlete-1');
+    // Build a File whose .size exceeds the ceiling without actually allocating
+    // 10MB of bytes — File reads .size from the provided buffer length, so we
+    // need to actually allocate. Use a Uint8Array of 11MB.
+    const big = new File([new Uint8Array(11 * 1024 * 1024)], 'huge.png', { type: 'image/png' });
+    const formData = new FormData();
+    formData.set('image', big);
+    const { POST } = await import('../app/api/imports/biomarker-panel-image/route');
+    const response = await POST(new Request('http://localhost/api/imports/biomarker-panel-image', { method: 'POST', body: formData }));
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toMatchObject({ error: expect.stringMatching(/upload limit/) });
+    expect(extractPanelFromImage).not.toHaveBeenCalled();
+  });
+
+  it('rate-limits per user after 3 calls/minute', async () => {
+    getAuthenticatedUserId.mockResolvedValue('athlete-1');
+    extractPanelFromImage.mockResolvedValue({
+      panelDate: '2026-05-01', provider: null, panelName: null,
+      markers: [{ rawName: 'Apolipoprotein B', value: 80, unit: 'mg/dL' }],
+    });
+    matchRawNameToCatalogKey.mockReturnValue('apob');
+    const { POST } = await import('../app/api/imports/biomarker-panel-image/route');
+    const makeReq = () => {
+      const f = new FormData();
+      f.set('image', new File([new Uint8Array([0xff, 0xd8, 0xff])], 'p.jpg', { type: 'image/jpeg' }));
+      return new Request('http://localhost/api/imports/biomarker-panel-image', { method: 'POST', body: f });
+    };
+
+    const a = await POST(makeReq());
+    const b = await POST(makeReq());
+    const c = await POST(makeReq());
+    const d = await POST(makeReq());
+
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    expect(c.status).toBe(200);
+    expect(d.status).toBe(429);
+    expect(d.headers.get('Retry-After')).toBeTruthy();
+  });
+});

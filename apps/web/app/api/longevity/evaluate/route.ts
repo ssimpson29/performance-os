@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { runLongevityGuru, type LongevityMarkerInput } from '@/lib/agents/longevity-guru';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { persistLongevityRun } from '@/lib/longevity/persistence';
 import { getAuthenticatedUserId } from '@/lib/server-auth';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
@@ -35,6 +36,14 @@ export async function POST(request: Request) {
   const userId = await getAuthenticatedUserId();
   if (!userId) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const rate = checkRateLimit({ key: `longevity-evaluate:${userId}`, limit: 5, windowMs: 60_000 });
+  if (!rate.ok) {
+    return NextResponse.json(
+      { error: 'Re-evaluating too frequently. Try again shortly.', retryAfterMs: rate.retryAfterMs },
+      { status: 429, headers: { 'Retry-After': String(Math.ceil(rate.retryAfterMs / 1000)) } },
+    );
   }
 
   const body = (await request.json().catch(() => null)) as {

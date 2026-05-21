@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { loadAdaptiveCoachContext } from '@/app/plan/coach-data';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { runTrainingCoach } from '@/lib/agents/training-coach';
 import { loadTrainingCoachState, persistTrainingCoachRun } from '@/lib/agents/training-coach-persistence';
 import { getAuthenticatedUserId } from '@/lib/server-auth';
@@ -11,6 +12,14 @@ export async function POST(request: Request) {
   const userId = await getAuthenticatedUserId();
   if (!userId) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const rate = checkRateLimit({ key: `coach-message:${userId}`, limit: 10, windowMs: 60_000 });
+  if (!rate.ok) {
+    return NextResponse.json(
+      { error: 'Too many coach messages. Try again shortly.', retryAfterMs: rate.retryAfterMs },
+      { status: 429, headers: { 'Retry-After': String(Math.ceil(rate.retryAfterMs / 1000)) } },
+    );
   }
 
   const body = (await request.json().catch(() => null)) as { message?: string } | null;

@@ -134,3 +134,32 @@ describe('POST /api/coach/message', () => {
     await expect(response.json()).resolves.toMatchObject({ error: expect.stringMatching(/No active training plan/) });
   });
 });
+
+
+describe('POST /api/coach/message — rate limit', () => {
+  beforeEach(async () => {
+    vi.resetAllMocks();
+    const { resetRateLimitStore } = await import('../lib/rate-limit');
+    resetRateLimitStore();
+    createServerSupabaseClient.mockReturnValue({ marker: 'supabase' });
+    loadAdaptiveCoachContext.mockResolvedValue(SAMPLE_COACH_INPUT);
+    adaptWeeklyStructure.mockReturnValue(SAMPLE_ADAPTIVE);
+    loadTrainingCoachState.mockResolvedValue({ conversation: [], followUp: null });
+    runTrainingCoach.mockResolvedValue(SAMPLE_OUTPUT);
+    persistTrainingCoachRun.mockResolvedValue({ summaryId: 'sum-1', healthEventInserted: false });
+  });
+
+  it('returns 429 after 10 calls/min from the same authenticated user', async () => {
+    getAuthenticatedUserId.mockResolvedValue('athlete-1');
+    const { POST } = await import('../app/api/coach/message/route');
+    const req = () => makeRequest({ message: 'how should I run today?' });
+
+    for (let i = 0; i < 10; i++) {
+      const r = await POST(req());
+      expect(r.status).toBe(200);
+    }
+    const eleventh = await POST(req());
+    expect(eleventh.status).toBe(429);
+    expect(eleventh.headers.get('Retry-After')).toBeTruthy();
+  });
+});

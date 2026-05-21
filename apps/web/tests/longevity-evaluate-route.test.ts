@@ -119,3 +119,33 @@ describe('POST /api/longevity/evaluate', () => {
     });
   });
 });
+
+
+describe('POST /api/longevity/evaluate — rate limit', () => {
+  beforeEach(async () => {
+    vi.resetAllMocks();
+    const { resetRateLimitStore } = await import('../lib/rate-limit');
+    resetRateLimitStore();
+    createServerSupabaseClient.mockReturnValue(
+      makeSupabase({
+        biomarker_results: { data: [{ biomarker_key: 'apob', value_numeric: 100, unit: 'mg/dL', measured_at: '2026-05-01' }], error: null },
+        users: { data: [{ date_of_birth: '1988-03-12', sex: 'male' }], error: null },
+      }),
+    );
+    runLongevityGuru.mockResolvedValue(SAMPLE_OUTPUT);
+    persistLongevityRun.mockResolvedValue({ summaryId: 'sum-1' });
+  });
+
+  it('returns 429 after 5 calls/min from the same authenticated user', async () => {
+    getAuthenticatedUserId.mockResolvedValue('athlete-1');
+    const { POST } = await import('../app/api/longevity/evaluate/route');
+    const req = () => makeRequest({});
+
+    for (let i = 0; i < 5; i++) {
+      const r = await POST(req());
+      expect(r.status).toBe(200);
+    }
+    const sixth = await POST(req());
+    expect(sixth.status).toBe(429);
+  });
+});
