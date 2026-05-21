@@ -273,8 +273,9 @@ function computePlanAdaptation(args: {
   recoveryTrend: RecoveryTrend | undefined;
   performanceDelta: PerformanceDelta | undefined;
   fatigueState: FatigueState;
+  longevityRecoveryPriority?: 'low' | 'normal' | 'elevated';
 }): PlanAdaptation | undefined {
-  const { phasePosition, recoveryTrend, performanceDelta, fatigueState } = args;
+  const { phasePosition, recoveryTrend, performanceDelta, fatigueState, longevityRecoveryPriority } = args;
 
   // Race week is locked: no plan-level adaptation regardless of signals.
   if (phasePosition?.isRaceWeek) {
@@ -301,12 +302,16 @@ function computePlanAdaptation(args: {
     };
   }
 
-  // Adapt-down: lagging adherence OR degraded recovery OR high fatigue.
+  // Adapt-down: lagging adherence OR degraded recovery OR high fatigue OR
+  // sustained-signal longevity priority (the two-coach conflict rule:
+  // sustained-signal-wins-for-longevity).
   const recoveryDegrading =
     recoveryTrend?.direction === 'degrading' && (recoveryTrend.confidence ?? 0) >= 0.4;
   const underPerforming = performanceDelta?.signal === 'under';
-  if (recoveryDegrading || underPerforming || fatigueState === 'high') {
+  const longevityElevated = longevityRecoveryPriority === 'elevated';
+  if (longevityElevated || recoveryDegrading || underPerforming || fatigueState === 'high') {
     const reasons: string[] = [];
+    if (longevityElevated) reasons.push('Longevity Guru flagged recovery priority as elevated');
     if (recoveryDegrading) reasons.push('recovery markers trending down');
     if (underPerforming) reasons.push('completed volume is meaningfully below the prescribed week');
     if (fatigueState === 'high') reasons.push('weekend overload is elevated');
@@ -328,7 +333,8 @@ function computePlanAdaptation(args: {
     overPerforming &&
     recoveryHealthy &&
     fatigueState === 'manageable' &&
-    phasePosition?.raiseAllowed
+    phasePosition?.raiseAllowed &&
+    !longevityElevated
   ) {
     // Magnitude: scale with how much the athlete is over the prescription,
     // capped at +12% so we don't lurch the plan in one block.
@@ -354,6 +360,7 @@ function applyRaceAwareOverrides(
   base: AdaptedRecommendation,
   phasePosition: PhasePosition | undefined,
   recoveryTrend: RecoveryTrend | undefined,
+  longevityRecoveryPriority?: 'low' | 'normal' | 'elevated',
 ): AdaptedRecommendation {
   // Race week: lock to the plan (no downgrades or raises in daily recs).
   if (phasePosition?.isRaceWeek) {
@@ -372,6 +379,24 @@ function applyRaceAwareOverrides(
     return {
       ...base,
       reason: `${base.reason} Taper phase — do not exceed prescribed work.`,
+    };
+  }
+
+  // Longevity signal: sustained-elevated recovery priority defers Tuesday
+  // quality even without weekend overload or a degrading short-window trend.
+  // (Two-coach conflict rule: longevity wins on sustained signals.)
+  if (
+    base.day === 'Tuesday' &&
+    base.action === 'keep' &&
+    longevityRecoveryPriority === 'elevated'
+  ) {
+    return {
+      day: base.day,
+      baseSessionType: base.baseSessionType,
+      recommendedSessionType: 'Controlled Tempo or Reduced Intervals',
+      action: 'defer-intensity',
+      reason:
+        'Longevity Guru flagged recovery priority as elevated; defer Tuesday quality until the longevity signal clears.',
     };
   }
 
@@ -433,8 +458,10 @@ export function adaptWeeklyStructure(input: AdaptiveCoachInput): AdaptiveCoachRe
     .filter((session) => ['Monday', 'Tuesday'].includes(session.day))
     .map((session) => buildRecommendation(session, fatigueState));
 
+  const longevityRecoveryPriority = input.longevityContext?.recoveryPriority;
+
   const recommendations = baseRecommendations.map((rec) =>
-    applyRaceAwareOverrides(rec, phasePosition, recoveryTrend),
+    applyRaceAwareOverrides(rec, phasePosition, recoveryTrend, longevityRecoveryPriority),
   );
 
   const planAdaptation = computePlanAdaptation({
@@ -442,6 +469,7 @@ export function adaptWeeklyStructure(input: AdaptiveCoachInput): AdaptiveCoachRe
     recoveryTrend,
     performanceDelta,
     fatigueState,
+    longevityRecoveryPriority,
   });
 
   return {

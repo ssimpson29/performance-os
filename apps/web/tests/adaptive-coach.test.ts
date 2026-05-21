@@ -413,3 +413,74 @@ describe('adaptWeeklyStructure — race-aware adapt-down (worked example 2)', ()
     expect(adapted.planAdaptation).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Cross-influence loop — Training Coach reads longevityContext
+// ---------------------------------------------------------------------------
+
+describe('adaptWeeklyStructure — longevityContext cross-influence', () => {
+  const baseRaceAwareInput = () => ({
+    weeklyStructure,
+    completedWorkouts: manageableWeekend,
+    currentDay: 'Monday' as const,
+    recoveryScore: 80,
+    today: '2026-03-09',
+    planStartDate: '2026-02-02',
+    raceDate: '2026-08-07',
+    phaseBlocks: buildPhaseBlocks(),
+    prescribedWeek: { volumeTarget: 120, intensityTarget: 5 },
+    recoveryHistory: steadyHealthyRecovery(),
+  });
+
+  it("suppresses adapt-up when longevity recoveryPriority is 'elevated' even on healthy over-performance", () => {
+    const adapted = adaptWeeklyStructure({
+      ...baseRaceAwareInput(),
+      longevityContext: {
+        recoveryPriority: 'elevated',
+        notes: 'cardiometabolic signal sustained',
+      },
+    });
+
+    expect(adapted.performanceDelta?.signal).toBe('over');
+    expect(adapted.phasePosition?.raiseAllowed).toBe(true);
+    // Without longevityContext this would adapt up; with elevated it goes 'lower'.
+    expect(adapted.planAdaptation?.suggestion).toBe('lower');
+    expect(adapted.planAdaptation?.reason).toMatch(/Longevity Guru flagged recovery priority/);
+  });
+
+  it("defers Tuesday quality when longevity recoveryPriority is 'elevated' (no weekend overload, no degrading trend)", () => {
+    const adapted = adaptWeeklyStructure({
+      ...baseRaceAwareInput(),
+      longevityContext: { recoveryPriority: 'elevated', notes: 'inflammation flag' },
+    });
+
+    const tuesday = adapted.recommendations.find((r) => r.day === 'Tuesday');
+    expect(tuesday?.action).toBe('defer-intensity');
+    expect(tuesday?.reason).toMatch(/Longevity Guru flagged recovery priority/);
+  });
+
+  it("does NOT change behavior when longevity recoveryPriority is 'normal'", () => {
+    const adapted = adaptWeeklyStructure({
+      ...baseRaceAwareInput(),
+      longevityContext: { recoveryPriority: 'normal', notes: '' },
+    });
+
+    // Over-performing + healthy + manageable + non-taper → adapt up should still fire.
+    expect(adapted.planAdaptation?.suggestion).toBe('raise');
+    const tuesday = adapted.recommendations.find((r) => r.day === 'Tuesday');
+    expect(tuesday?.action).toBe('keep');
+  });
+
+  it("does NOT change behavior when longevity recoveryPriority is 'low'", () => {
+    const adapted = adaptWeeklyStructure({
+      ...baseRaceAwareInput(),
+      longevityContext: { recoveryPriority: 'low', notes: '' },
+    });
+    expect(adapted.planAdaptation?.suggestion).toBe('raise');
+  });
+
+  it('preserves existing behavior when longevityContext is absent (backward compat)', () => {
+    const adapted = adaptWeeklyStructure(baseRaceAwareInput());
+    expect(adapted.planAdaptation?.suggestion).toBe('raise');
+  });
+});

@@ -134,6 +134,18 @@ export type AdaptiveCoachInput = {
   goal?: string;
   /** Structured race context from training_plans.metadata.raceContext. */
   raceContext?: RaceContext;
+  /**
+   * Cross-write from the Longevity Guru, read out of
+   * daily_summaries.summary.longevityContext. When recoveryPriority is
+   * 'elevated', the engine suppresses adapt-up, biases toward 'lower',
+   * and defers Tuesday quality regardless of weekend overload.
+   * Structurally compatible with LongevityContext in lib/agents/longevity-guru.ts.
+   */
+  longevityContext?: {
+    recoveryPriority: 'low' | 'normal' | 'elevated';
+    notes?: string;
+    evaluatedAt?: string;
+  };
 };
 
 export type PhasePosition = {

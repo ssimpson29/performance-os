@@ -141,12 +141,26 @@ LLM is optional. Always preserve deterministic fallback for tests, local dev, an
 over this 3-layer engine: the **Training Coach** (adaptive, daily, races
 to Swiss Alps 100) and the **Longevity Guru** (strategic, weekly/monthly,
 optimizes healthspan past the race). They share the data layer, share
-auth, cross-influence via `daily_summaries.summary.longevityContext`,
-and resolve conflicts with sustained-signal-wins-for-longevity /
-acute-need-wins-for-training. See `docs/two-coach-architecture.md` for
-the higher-level model, including the Training Coach worked examples
-(adapt-up on healthy over-performance, conversational injury
-management with re-evaluation, phase-aware behavior).
+auth, cross-influence **bidirectionally** via
+`daily_summaries.summary.longevityContext`, and resolve conflicts with
+sustained-signal-wins-for-longevity / acute-need-wins-for-training.
+
+Cross-influence is live in both directions:
+- **Longevity Guru → Training Coach.** `lib/agents/longevity-guru.ts`
+  writes `recoveryPriority: 'low' | 'normal' | 'elevated'` to
+  `daily_summaries.summary.longevityContext`. The Training Coach loader
+  (`app/plan/coach-data.ts::loadLongevityContextForAthlete`) reads it
+  back, and `lib/training-plan/adaptive-coach.ts` treats `'elevated'`
+  as a downgrade input: suppresses adapt-up regardless of performance
+  delta, biases `planAdaptation.suggestion` toward `'lower'`, and defers
+  Tuesday quality.
+- **Training Coach → Longevity Guru.** Sustained training-load overreach
+  feeds `runLongevityGuru({ trainingLoadOverreach: { sustainedOverreach,
+  description } })` and adds a `performance_recovery` lever.
+
+See `docs/two-coach-architecture.md` for the higher-level model and
+worked examples (adapt-up on healthy over-performance, conversational
+injury management with re-evaluation, phase-aware behavior).
 
 ### Coach memory persistence
 Use `daily_summaries.summary` JSON blob:

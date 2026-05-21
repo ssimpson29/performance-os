@@ -166,6 +166,47 @@ export async function loadActiveTrainingPlan(
   };
 }
 
+type DailySummaryLongevityRow = {
+  summary: Record<string, unknown> | null;
+};
+
+/**
+ * Read just the cross-write longevityContext signal for the athlete + today.
+ * Returns null when nothing is set. Lightweight read used by the Training
+ * Coach data loader to factor longevity priority into adaptive decisions.
+ */
+export async function loadLongevityContextForAthlete(
+  supabase: SupabaseClient,
+  userId: string,
+  today: string,
+): Promise<AdaptiveCoachInput['longevityContext'] | null> {
+  const { data, error } = await supabase
+    .from('daily_summaries')
+    .select('summary')
+    .eq('user_id', userId)
+    .eq('day', today)
+    .limit(1);
+  if (error) {
+    throw new Error(`Failed to load longevityContext: ${error.message}`);
+  }
+  const summary = ((data as DailySummaryLongevityRow[] | null) ?? [])[0]?.summary ?? {};
+  const ctx = (summary as Record<string, unknown>).longevityContext;
+  if (!ctx || typeof ctx !== 'object') return null;
+  const obj = ctx as Record<string, unknown>;
+  if (
+    obj.recoveryPriority !== 'low' &&
+    obj.recoveryPriority !== 'normal' &&
+    obj.recoveryPriority !== 'elevated'
+  ) {
+    return null;
+  }
+  return {
+    recoveryPriority: obj.recoveryPriority,
+    notes: typeof obj.notes === 'string' ? obj.notes : undefined,
+    evaluatedAt: typeof obj.evaluatedAt === 'string' ? obj.evaluatedAt : undefined,
+  };
+}
+
 export type LoadAdaptiveCoachContextOptions = {
   today?: string;
   lookbackDays?: number;
@@ -193,9 +234,10 @@ export async function loadAdaptiveCoachContext(
     throw new Error('No active training plan found for athlete; cannot assemble coach context.');
   }
 
-  const [completedWorkouts, recoveryHistory] = await Promise.all([
+  const [completedWorkouts, recoveryHistory, longevityContext] = await Promise.all([
     loadCompletedWorkouts(supabase, userId, { today, lookbackDays: options.lookbackDays }),
     loadRecoveryHistory(supabase, userId, { today, lookbackDays: options.lookbackDays }),
+    loadLongevityContextForAthlete(supabase, userId, today),
   ]);
 
   const currentDay = dayFromIsoDate(today);
@@ -215,5 +257,6 @@ export async function loadAdaptiveCoachContext(
     recoveryHistory,
     goal: plan.goal ?? undefined,
     raceContext: plan.raceContext,
+    longevityContext: longevityContext ?? undefined,
   };
 }

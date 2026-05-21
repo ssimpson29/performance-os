@@ -4,6 +4,7 @@ import {
   loadActiveTrainingPlan,
   loadAdaptiveCoachContext,
   loadCompletedWorkouts,
+  loadLongevityContextForAthlete,
   loadRecoveryHistory,
 } from '../app/plan/coach-data';
 
@@ -266,5 +267,116 @@ describe('loadAdaptiveCoachContext', () => {
     await expect(loadAdaptiveCoachContext(supabase, 'user-1', { today: '2026-05-21' })).rejects.toThrow(
       /No active training plan/,
     );
+  });
+});
+
+describe('loadLongevityContextForAthlete', () => {
+  it('returns the parsed context when present', async () => {
+    const supabase = makeSupabase({
+      daily_summaries: {
+        data: [
+          {
+            summary: {
+              longevityContext: {
+                recoveryPriority: 'elevated',
+                notes: 'cardiometabolic signal',
+                evaluatedAt: '2026-05-21T00:00:00.000Z',
+              },
+            },
+          },
+        ],
+        error: null,
+      },
+    });
+    const ctx = await loadLongevityContextForAthlete(supabase, 'user-1', '2026-05-21');
+    expect(ctx?.recoveryPriority).toBe('elevated');
+    expect(ctx?.notes).toBe('cardiometabolic signal');
+  });
+
+  it('returns null when no row exists', async () => {
+    const supabase = makeSupabase({ daily_summaries: { data: [], error: null } });
+    const ctx = await loadLongevityContextForAthlete(supabase, 'user-1', '2026-05-21');
+    expect(ctx).toBeNull();
+  });
+
+  it('returns null when summary exists but longevityContext is unset', async () => {
+    const supabase = makeSupabase({
+      daily_summaries: { data: [{ summary: { coachConversation: [] } }], error: null },
+    });
+    const ctx = await loadLongevityContextForAthlete(supabase, 'user-1', '2026-05-21');
+    expect(ctx).toBeNull();
+  });
+
+  it('returns null when recoveryPriority is malformed', async () => {
+    const supabase = makeSupabase({
+      daily_summaries: {
+        data: [{ summary: { longevityContext: { recoveryPriority: 'unknown-value' } } }],
+        error: null,
+      },
+    });
+    const ctx = await loadLongevityContextForAthlete(supabase, 'user-1', '2026-05-21');
+    expect(ctx).toBeNull();
+  });
+});
+
+describe('loadAdaptiveCoachContext — threads longevityContext through', () => {
+  it('passes longevityContext from daily_summaries into the assembled coach input', async () => {
+    const supabase = makeSupabase({
+      training_plans: {
+        data: [
+          {
+            id: 'plan-1',
+            start_date: '2026-02-02',
+            end_date: '2026-08-07',
+            goal: 'place top 10',
+            metadata: { weeklyStructure: [], phaseBlocks: [] },
+            created_at: '2026-02-01T00:00:00Z',
+          },
+        ],
+        error: null,
+      },
+      workouts: { data: [], error: null },
+      recovery_daily: { data: [], error: null },
+      daily_summaries: {
+        data: [
+          {
+            summary: {
+              longevityContext: {
+                recoveryPriority: 'elevated',
+                notes: 'cardiometabolic + inflammation',
+                evaluatedAt: '2026-05-21T00:00:00.000Z',
+              },
+            },
+          },
+        ],
+        error: null,
+      },
+    });
+    const ctx = await loadAdaptiveCoachContext(supabase, 'user-1', { today: '2026-05-21' });
+    expect(ctx.longevityContext?.recoveryPriority).toBe('elevated');
+    expect(ctx.longevityContext?.notes).toMatch(/cardiometabolic/);
+  });
+
+  it('leaves longevityContext undefined when no daily_summary is present', async () => {
+    const supabase = makeSupabase({
+      training_plans: {
+        data: [
+          {
+            id: 'plan-1',
+            start_date: '2026-02-02',
+            end_date: '2026-08-07',
+            goal: null,
+            metadata: { weeklyStructure: [], phaseBlocks: [] },
+            created_at: '2026-02-01T00:00:00Z',
+          },
+        ],
+        error: null,
+      },
+      workouts: { data: [], error: null },
+      recovery_daily: { data: [], error: null },
+      daily_summaries: { data: [], error: null },
+    });
+    const ctx = await loadAdaptiveCoachContext(supabase, 'user-1', { today: '2026-05-21' });
+    expect(ctx.longevityContext).toBeUndefined();
   });
 });
