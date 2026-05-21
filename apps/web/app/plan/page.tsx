@@ -12,14 +12,30 @@ import { PlanVsActualSection } from './plan-vs-actual-section';
 async function getImportedPlanPreview() {
   const fixturePath = join(process.cwd(), 'tests/fixtures/Swiss Alps 100.xlsx');
   const parsed = parseTrainingPlanWorkbook(readFileSync(fixturePath), 'Swiss Alps 100.xlsx');
+  // Demo inputs: an athlete 12 weeks into the plan with a healthy
+  // over-performing trend (recovery stable in mid-70s, prescribed-vs-completed
+  // delta positive). This exercises the race-aware adapt-up logic so the
+  // page demonstrates the full engine, not just the legacy weekend-overload
+  // heuristic.
+  const demoToday = '2026-04-27'; // ~14 weeks into the plan, race week 26 is 2026-08-03
+  const demoRecoveryHistory = Array.from({ length: 10 }, (_, i) => ({
+    date: `2026-04-${String(18 + i).padStart(2, '0')}`,
+    score: 76 + (i % 3),
+  }));
   const adaptivePreview = adaptWeeklyStructure({
     weeklyStructure: parsed.weeklyStructure,
     completedWorkouts: [
-      { day: 'Saturday', durationMinutes: 330, intensityScore: 9, loadScore: 320, sessionType: 'Long Run' },
-      { day: 'Sunday', durationMinutes: 240, intensityScore: 8, loadScore: 240, sessionType: 'Mountain Long Run' },
+      { day: 'Saturday', durationMinutes: 210, intensityScore: 6, loadScore: 180, sessionType: 'Long Run' },
+      { day: 'Sunday', durationMinutes: 150, intensityScore: 5, loadScore: 120, sessionType: 'Aerobic Recovery' },
     ],
     currentDay: 'Monday',
-    recoveryScore: 46,
+    recoveryScore: 78,
+    today: demoToday,
+    planStartDate: '2026-02-02',
+    raceDate: '2026-08-07',
+    phaseBlocks: parsed.phaseBlocks,
+    prescribedWeek: { volumeTarget: 280, intensityTarget: 5 },
+    recoveryHistory: demoRecoveryHistory,
   });
 
   const planVsActualPreview = await loadPlanVsActualPreview();
@@ -79,6 +95,79 @@ export default async function PlanPage() {
       </section>
 
       <PlanVsActualSection preview={planVsActualPreview} />
+
+      <section className="shell pb-8">
+        <Card className="space-y-4">
+          <div>
+            <p className="eyebrow">Race-aware engine</p>
+            <h2 className="mt-2 text-2xl font-semibold text-white">Phase position and plan-level adaptation.</h2>
+            <p className="mt-2 text-sm leading-6 text-muted">
+              The deterministic coach reads the active plan, recent workouts, and recovery
+              trend to know where the athlete is in the race build and whether the next
+              block should hold, raise, or lower its load.
+            </p>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-5">
+              <p className="text-xs uppercase tracking-[0.18em] text-brand2">Phase position</p>
+              {adaptivePreview.phasePosition ? (
+                <>
+                  <h3 className="mt-2 text-lg font-semibold text-white">{adaptivePreview.phasePosition.phaseName ?? 'Unknown phase'}</h3>
+                  <p className="mt-3 text-sm leading-6 text-muted">
+                    Week {adaptivePreview.phasePosition.weekIndexInPhase + 1} of phase ·
+                    {' '}{adaptivePreview.phasePosition.weeksToRace} weeks to race ·
+                    {' '}{adaptivePreview.phasePosition.isRaceWeek ? 'race week' : adaptivePreview.phasePosition.isTaper ? 'taper' : adaptivePreview.phasePosition.raiseAllowed ? 'raises allowed' : 'raises locked'}
+                  </p>
+                </>
+              ) : (
+                <p className="mt-3 text-sm text-muted">Phase data unavailable.</p>
+              )}
+            </div>
+            <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-5">
+              <p className="text-xs uppercase tracking-[0.18em] text-brand2">Plan-level adaptation</p>
+              {adaptivePreview.planAdaptation ? (
+                <>
+                  <h3 className="mt-2 text-lg font-semibold text-white">
+                    {adaptivePreview.planAdaptation.suggestion === 'raise' && `Raise next block ~${adaptivePreview.planAdaptation.magnitudePct}%`}
+                    {adaptivePreview.planAdaptation.suggestion === 'hold' && 'Hold next block'}
+                    {adaptivePreview.planAdaptation.suggestion === 'lower' && `Lower next block ~${Math.abs(adaptivePreview.planAdaptation.magnitudePct)}%`}
+                  </h3>
+                  <p className="mt-3 text-sm leading-6 text-muted">{adaptivePreview.planAdaptation.reason}</p>
+                </>
+              ) : (
+                <p className="mt-3 text-sm text-muted">No block-level change recommended right now.</p>
+              )}
+            </div>
+            <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-5">
+              <p className="text-xs uppercase tracking-[0.18em] text-brand2">Recovery trend</p>
+              {adaptivePreview.recoveryTrend ? (
+                <>
+                  <h3 className="mt-2 text-lg font-semibold text-white capitalize">{adaptivePreview.recoveryTrend.direction}</h3>
+                  <p className="mt-3 text-sm leading-6 text-muted">
+                    Confidence {Math.round(adaptivePreview.recoveryTrend.confidence * 100)}% over {adaptivePreview.recoveryTrend.sampleCount} samples.
+                  </p>
+                </>
+              ) : (
+                <p className="mt-3 text-sm text-muted">No recovery history supplied.</p>
+              )}
+            </div>
+            <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-5">
+              <p className="text-xs uppercase tracking-[0.18em] text-brand2">Performance vs. plan</p>
+              {adaptivePreview.performanceDelta ? (
+                <>
+                  <h3 className="mt-2 text-lg font-semibold text-white capitalize">{adaptivePreview.performanceDelta.signal}</h3>
+                  <p className="mt-3 text-sm leading-6 text-muted">
+                    Volume delta {adaptivePreview.performanceDelta.volumeDelta == null ? 'n/a' : `${(adaptivePreview.performanceDelta.volumeDelta * 100).toFixed(0)}%`} ·
+                    {' '}intensity delta {adaptivePreview.performanceDelta.intensityDelta == null ? 'n/a' : `${(adaptivePreview.performanceDelta.intensityDelta * 100).toFixed(0)}%`}
+                  </p>
+                </>
+              ) : (
+                <p className="mt-3 text-sm text-muted">No prescribed week supplied.</p>
+              )}
+            </div>
+          </div>
+        </Card>
+      </section>
 
       <section className="shell grid gap-6 pb-16 lg:grid-cols-2">
         <Card className="space-y-4">
