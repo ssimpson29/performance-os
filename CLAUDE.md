@@ -101,6 +101,8 @@ npm run test --workspace @performance-os/web   # vitest run
   - `GET  /api/imports/oura/connect`
   - `POST /api/sync/oura`
   - `POST /api/coach/message`
+  - `POST /api/longevity/evaluate`
+  - `POST /api/imports/biomarker-panel`
 - **Intentional exception:** `POST /api/imports/apple-health/push`
   uses signed URL + HMAC signature for iPhone Shortcut automation. Do
   NOT convert to cookie auth. The signed URL itself is the credential.
@@ -108,9 +110,16 @@ npm run test --workspace @performance-os/web   # vitest run
   write each other's data through browser flows.
 
 ### Coach architecture (3 layers — keep separate)
+
+**Training Coach** (daily, race-driven):
 1. **Deterministic engine** — `apps/web/lib/training-plan/adaptive-coach.ts` (pure, heavily tested)
 2. **Athlete-scoped data loader** — `apps/web/app/plan/coach-data.ts`
-3. **Interactive coach service** — `apps/web/lib/agents/training-coach.ts` + `apps/web/app/coach/data.ts`
+3. **Interactive coach service** — `apps/web/lib/agents/training-coach.ts` + `apps/web/app/coach/coach-data.ts` (server) + `apps/web/app/coach/coach-chat.tsx` (client)
+
+**Longevity Guru** (strategic, healthspan-driven):
+1. **Deterministic engine** — `apps/web/lib/longevity/{reference-ranges,trend-detection,prioritization}.ts`
+2. **Athlete-scoped data loader** — `apps/web/app/longevity/longevity-data.ts`
+3. **Interactive guru service** — `apps/web/lib/agents/longevity-guru.ts` + `apps/web/lib/longevity/persistence.ts` (cross-write)
 
 LLM is optional. Always preserve deterministic fallback for tests, local dev, and provider outages.
 
@@ -132,8 +141,10 @@ Use `daily_summaries.summary` JSON blob:
 - `coachRecommendations`
 - `coachCautions`
 - `coachFollowUp` — `{ easyThroughDate, checkInDate, status }`
+- `longevityContext` — `{ recoveryPriority: 'low' | 'normal' | 'elevated', notes, evaluatedAt }` — written by Longevity Guru; the Training Coach reads `recoveryPriority === 'elevated'` as a downgrade input.
+- `longevityPriorities`, `longevityWatching`, `longevityNarrative`, `longevityCautions` — Longevity Guru run state (most recent evaluation).
 
-Use `training_recommendation` for top-line current answer.
+Use `training_recommendation` for the top-line current Training Coach answer; `longevity_priority` for the top-line current Longevity Guru lever.
 
 ### Injury/strain reporting
 When athlete message mentions strain/injury, also insert `health_events` row:
