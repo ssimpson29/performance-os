@@ -89,16 +89,29 @@ npm run test --workspace @performance-os/web   # vitest run
 ## Conventions (non-negotiable)
 
 ### Athlete identity scoping
-- Browser/UI flows derive athlete from Supabase auth cookies via `getAuthenticatedUserId()` or `getAuthenticatedUser()` (in `apps/web/lib/server-auth.ts`).
-- **Never** trust `userId` from query, body, or form data on browser-driven routes.
-- Routes converted to auth-scoped:
+**Status (2026-05-21): target convention, not yet implemented.** The
+primitive (`lib/server-auth.ts` with `getAuthenticatedUserId()` /
+`getAuthenticatedUser()`) does not exist yet, and none of the routes
+listed below have been converted. All five still read `userId` from
+the request body, form, or query. This is tracked as Open Work item #5.
+
+When the conversion lands, this is the contract:
+- Browser/UI flows derive athlete from Supabase auth cookies via
+  `getAuthenticatedUserId()` or `getAuthenticatedUser()` (in
+  `apps/web/lib/server-auth.ts`).
+- **Never** trust `userId` from query, body, or form data on
+  browser-driven routes.
+- Routes that MUST be auth-scoped:
   - `POST /api/imports/training-plan`
   - `POST /api/imports/workouts`
   - `POST /api/imports/apple-health`
   - `GET  /api/imports/oura/connect`
   - `POST /api/sync/oura`
-- **Intentional exception:** `POST /api/imports/apple-health/push` uses signed URL + HMAC signature for iPhone Shortcut automation. Do NOT convert to cookie auth. The signed URL itself is the credential.
-- Two athletes signed into the same deployment must never read or write each other's data through browser flows.
+- **Intentional exception:** `POST /api/imports/apple-health/push`
+  uses signed URL + HMAC signature for iPhone Shortcut automation. Do
+  NOT convert to cookie auth. The signed URL itself is the credential.
+- Two athletes signed into the same deployment must never read or
+  write each other's data through browser flows.
 
 ### Coach architecture (3 layers — keep separate)
 1. **Deterministic engine** — `apps/web/lib/training-plan/adaptive-coach.ts` (pure, heavily tested)
@@ -161,6 +174,24 @@ The training plan defines weekly structure baseline. The coach adapts daily work
 - `docs/plans/2026-05-04-training-import-and-adaptive-coach.md`
 - `docs/plans/2026-05-05-iphone-first-app-mvp.md`
 - `docs/plans/2026-05-07-production-deployment-and-ios-backend.md`
+- `docs/deploy.md` — in-repo deployment guide (env matrix, Vercel
+  recipe, post-deploy steps).
+
+### 5. Auth-scope all browser-driven import/sync routes
+- Build `apps/web/lib/server-auth.ts` exposing
+  `getAuthenticatedUserId()` and `getAuthenticatedUser()`, backed by
+  `@supabase/ssr` cookie reading.
+- Convert these five routes from caller-supplied `userId` to
+  auth-scoped: `/api/imports/training-plan`, `/api/imports/workouts`,
+  `/api/imports/apple-health`, `/api/imports/oura/connect`,
+  `/api/sync/oura`.
+- For each route, add the four required tests (see "Testing Approach"
+  below): 401 unauthenticated, uses authenticated id, ignores
+  caller-supplied `userId`, happy path.
+- `POST /api/imports/apple-health/push` stays signed-URL — do not
+  convert.
+- Until this lands, the dev assumption is single-athlete; do NOT ship
+  to a multi-tenant production without this work done.
 
 ---
 
