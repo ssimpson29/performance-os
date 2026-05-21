@@ -24,7 +24,7 @@ The app merges four layers: **Planned** (training plan) · **Actual** (Apple Wat
 performance-os/
   apps/
     web/                # Next.js 15 App Router + Supabase (PRIMARY ACTIVE WORK)
-    ios/                # Native SwiftUI + HealthKit scaffold (PAUSED — no Mac)
+    ios/                # Native SwiftUI + HealthKit scaffold (active in batched Mac sessions — see docs/ios-todo.md)
   docs/                 # Product, UX, architecture
     plans/              # Multi-step plan markdown (writing-plans skill output)
   research/             # Inspiration notes
@@ -74,11 +74,11 @@ npm run test --workspace @performance-os/web   # vitest run
 
 ## Operating Constraints
 
-**No Mac available.** Scott is on WSL/Windows only. This means:
-- `apps/ios/` work is paused. Do not invest effort there until a Mac is rented or cloud Mac is back online.
-- HealthKit ingestion must go through: iPhone Shortcuts → signed POST endpoint, OR Health Auto Export → REST endpoint.
-- No Xcode, no TestFlight, no native debugging from this environment.
-- For mobile-app feel without native: prefer PWA route or Expo + EAS cloud builds.
+**Mac access is intermittent.** Scott borrows a friend's Mac for Xcode sessions (currently active). Day-to-day work is WSL/Windows. This means:
+- `apps/ios/` work is active, but batched into Mac sittings. See `docs/ios-todo.md` for the running queue of Xcode/Mac actions — never do iOS work ad-hoc.
+- HealthKit ingestion: native iOS app via the signed Apple Health push endpoint is the active path. iPhone Shortcuts on the same endpoint remains the fallback (CLAUDE.md Open Work #1 workaround).
+- No TestFlight or App Store work yet.
+- Production is on Vercel at `https://performance-os-seven.vercel.app` — the iPhone app posts there directly.
 
 **Billing:** This project runs under Claude Max OAuth subscription, not metered API. Before launching `claude`, ensure `ANTHROPIC_API_KEY` is unset in the shell.
 
@@ -160,15 +160,15 @@ The training plan defines weekly structure baseline. The coach adapts daily work
 
 ## Open Work (priority order)
 
-### 1. iOS 401 on Apple Health push  *(paused without Mac)*
-- `POST /api/imports/apple-health/push` returns 401 for the iOS Swift client.
-- Likely placeholder/expired signed URL or signature mismatch.
-- **Workaround:** switch HealthKit ingestion to iPhone Shortcuts hitting the same signed endpoint. Validate the signature pipeline end-to-end with Shortcuts first.
+### 1. iOS 401 on Apple Health push — pending Mac smoke test
+- Status (2026-05-21): `APPLE_HEALTH_PUSH_SECRET` was rotated in Vercel after the previous signed URL was exposed in chat / upload context. The old URL is confirmed dead (returns 401).
+- **Next:** regenerate the signed URL from production `/settings/integrations`, paste it into a gitignored `AppConfig.local.swift` on the Mac, and run a smoke test from Xcode. Full queue in `docs/ios-todo.md` (Next session items 1–8).
+- **Workaround if Mac time is delayed:** iPhone Shortcuts hitting the same signed endpoint validates the signature pipeline end-to-end without Xcode. Steps in `docs/ios-todo.md` (Later → iOS 401 investigation — fallback path).
 
-### 2. Persist race context on `training_plans`
-- Foundation work for the race-aware coach.
-- See `docs/plans/2026-05-08-race-aware-adaptive-coach.md` if present, or `docs/plans/2026-05-04-training-import-and-adaptive-coach.md`.
-- Schema additions: `end_date`, `goal`, `metadata.{weeklyStructure,phaseBlocks,supportTemplates,raceContext}`.
+### 2. Persist race context on `training_plans` — done (2026-05-21)
+- Shipped in commit `2eb0588` (`feat(training-plan): persist race context on training_plans`).
+- `training_plans` now persists `end_date`, `goal`, `metadata.weeklyStructure`, `metadata.phaseBlocks`, `metadata.supportTemplates`, and (when supplied) `metadata.raceContext`.
+- Race-aware adaptive coach (Open Work #3) is built on this foundation.
 
 ### 3. Race-aware adaptive coach — deterministic core done, LLM layer remains
 - **Done.** `apps/web/lib/training-plan/adaptive-coach.ts` now exposes

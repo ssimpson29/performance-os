@@ -6,18 +6,22 @@ the exact recipe for getting the Next.js web app onto a stable HTTPS host so
 the iPhone Shortcut (and any future native iOS client) can push Apple Health
 workouts and complete Oura OAuth against a real domain.
 
-The current operating constraint: no Mac is available, so the native iOS app
-is paused. The unblocker for HealthKit ingestion is **production-deployed
-HTTPS**, not a Mac — iPhone Shortcuts can hit the signed Apple Health push
-endpoint as long as it lives on a stable URL.
+**Status (2026-05-21): production is live at `https://performance-os-seven.vercel.app`.**
+Phase 2 (Vercel project setup + env var entry + first deploy) and the initial
+Apple Health push URL generation are done. `APPLE_HEALTH_PUSH_SECRET` was
+rotated on 2026-05-21 after the previous signed URL was exposed in chat /
+upload context; the old URL is dead. Native iOS work is active again (Mac
+access is intermittent — see `docs/ios-todo.md`). The sections below remain
+the recipe for re-deploys, environment audits, and onboarding.
 
 ## Target stack
 
 - **Web + API:** Vercel (Next.js 15 App Router).
 - **Database / Auth:** Supabase (unchanged).
 - **OAuth provider:** Oura.
-- **Mobile ingest path (current):** iPhone Shortcut → signed POST →
-  `/api/imports/apple-health/push`.
+- **Mobile ingest path:** native iOS app (SwiftUI, in `apps/ios/`) →
+  signed POST → `/api/imports/apple-health/push`. iPhone Shortcut against
+  the same endpoint remains the fallback when Mac time isn't available.
 
 ## Required production environment variables
 
@@ -83,9 +87,12 @@ The signed push URL is built from `NEXT_PUBLIC_APP_URL` and
 
 1. Open `/settings/integrations` in production while signed in.
 2. Copy the regenerated signed URL.
-3. Paste it into the iPhone Shortcut that posts HealthKit workouts (and, in
-   the future, into `apps/ios/PerformanceOS/App/AppConfig.swift` when the
-   native client resumes).
+3. Paste it into the gitignored
+   `apps/ios/PerformanceOS/App/AppConfig.local.swift` on the Mac (see
+   `docs/ios-todo.md` items #1–#3 for the file pattern). The tracked
+   `AppConfig.swift` stays as a placeholder template and must not
+   contain real secrets. iPhone Shortcut is the same paste target if
+   Mac time is unavailable.
 
 Because the signature is HMAC of the user ID with
 `APPLE_HEALTH_PUSH_SECRET`, rotating that secret invalidates every existing
@@ -108,16 +115,34 @@ After the first deploy, verify in order:
    is enforced by the `(source, external_id)` pair in the workout ingestion
    pipeline).
 
-## Required Scott-side actions
+## Scott-side actions — status
 
-These cannot be automated from the repo:
+### Done (2026-05-21)
 
-1. Vercel login / project import.
-2. Vercel env var entry (the matrix above).
-3. Domain selection / DNS for the custom domain.
-4. Oura redirect URI update in the developer portal.
-5. Pasting the regenerated signed Apple Health push URL into the iPhone
-   Shortcut.
+1. Vercel project imported from `ssimpson29/performance-os`.
+2. Production environment variables populated in Vercel.
+3. Vercel-provided domain in use: `performance-os-seven.vercel.app`.
+4. Initial `APPLE_HEALTH_PUSH_SECRET` generated and set.
+5. First signed Apple Health push URL generated and pasted into the
+   native iOS `AppConfig.swift` on the Mac.
+6. **Rotation of `APPLE_HEALTH_PUSH_SECRET`** after the prior signed
+   URL was exposed in chat / upload context. New secret in Vercel,
+   redeploy applied, prior URL confirmed dead (returns 401).
+
+### Remaining
+
+1. **Regenerate signed Apple Health push URL** from production
+   `/settings/integrations` (item #1 in `docs/ios-todo.md`).
+2. **Verify Oura redirect URI** in the Oura developer portal points
+   at `https://performance-os-seven.vercel.app/api/imports/oura/callback`.
+   If not, update it; otherwise the Oura OAuth round-trip will fail in
+   production. Status currently unverified in this doc — confirm next
+   time you're in the Oura developer console.
+3. **Custom domain** (e.g. `app.performanceos.com`) — optional,
+   defer until Vercel domain is no longer fit for purpose.
+4. **Walk the smoke checklist** below once the new signed URL is in
+   `AppConfig.local.swift` on the Mac and a build runs on a physical
+   iPhone.
 
 ## Risk notes
 
@@ -130,8 +155,9 @@ These cannot be automated from the repo:
 
 ## Out of scope here
 
-- Native iOS app deployment to TestFlight — paused without a Mac.
-- The Apple Health push 401 from the historical Swift client (CLAUDE.md
-  open-work #1) — once production exists, validate the signature pipeline
-  through Shortcuts first; the Swift client can be re-pointed when a Mac is
-  available.
+- Native iOS app deployment to TestFlight — depends on a sustained-Mac
+  setup, not the current intermittent rented-Mac arrangement.
+- iOS source-file changes batched per Mac session — see
+  `docs/ios-todo.md`.
+- The Apple Health push 401 (CLAUDE.md Open Work #1) — tracked there,
+  with `docs/ios-todo.md` carrying the next-Mac-session queue.
