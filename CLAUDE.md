@@ -170,9 +170,22 @@ The training plan defines weekly structure baseline. The coach adapts daily work
 - See `docs/plans/2026-05-08-race-aware-adaptive-coach.md` if present, or `docs/plans/2026-05-04-training-import-and-adaptive-coach.md`.
 - Schema additions: `end_date`, `goal`, `metadata.{weeklyStructure,phaseBlocks,supportTemplates,raceContext}`.
 
-### 3. Race-aware adaptive coach
-- Current `adaptive-coach.ts` only handles weekend overload → Monday/Tuesday downgrade based on `fatigueState`.
-- Needs: race date awareness, phase-of-plan calculation, race-goal modeling, performance-based acceleration on good vitals, back-off on degraded recovery.
+### 3. Race-aware adaptive coach — deterministic core done, LLM layer remains
+- **Done.** `apps/web/lib/training-plan/adaptive-coach.ts` now exposes
+  `computePhasePosition`, `computeRecoveryTrend`, `computePerformanceDelta`,
+  and an extended `adaptWeeklyStructure` that layers race-phase awareness,
+  adapt-up on healthy over-performance, adapt-down on lagging
+  adherence / degraded recovery, race-week lock, and taper guards on
+  top of the existing weekend-overload heuristic. See worked examples
+  1, 2, and 4 in `docs/two-coach-architecture.md`.
+- **Remaining: conversational injury management** (worked example 3 in
+  `docs/two-coach-architecture.md`). Lives in the LLM Training Coach
+  service at `apps/web/lib/agents/training-coach.ts` (not yet built).
+  Must ask follow-up questions on strain/injury reports, use the
+  deterministic `coachFollowUp` window persistence, schedule the
+  re-evaluation prompt on `checkInDate`, and return to the normal
+  plan when athlete responses indicate recovery — using the
+  positive-recovery-phrase-before-negative ordering from pitfall #1.
 
 ### 4. Plan docs index (existing)
 - `docs/plans/2026-05-04-training-import-and-adaptive-coach.md`

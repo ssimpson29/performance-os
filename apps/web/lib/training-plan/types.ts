@@ -89,7 +89,7 @@ export type CompletedWorkout = {
   sessionType: string;
 };
 
-export type AdaptationAction = 'keep' | 'downgrade' | 'defer-intensity';
+export type AdaptationAction = 'keep' | 'downgrade' | 'defer-intensity' | 'raise';
 export type FatigueState = 'manageable' | 'elevated' | 'high';
 
 export type AdaptedRecommendation = {
@@ -100,17 +100,102 @@ export type AdaptedRecommendation = {
   reason: string;
 };
 
+export type RecoverySample = {
+  date: string;
+  score: number;
+};
+
+export type PrescribedWeek = {
+  /** Total prescribed running volume for the rolling week (any consistent unit). */
+  volumeTarget?: number;
+  /** Mean prescribed session intensity for the rolling week (1-10 RPE-equivalent). */
+  intensityTarget?: number;
+};
+
 export type AdaptiveCoachInput = {
   weeklyStructure: WeeklyStructureSession[];
   completedWorkouts: CompletedWorkout[];
   currentDay: string;
   recoveryScore?: number;
+
+  /** ISO date (YYYY-MM-DD) representing "today". Required for race-aware adaptation. */
+  today?: string;
+  /** ISO race date from training_plans.end_date. */
+  raceDate?: string;
+  /** ISO plan start date (first Monday of week 1). */
+  planStartDate?: string;
+  /** Phase blocks from training_plans.metadata.phaseBlocks. */
+  phaseBlocks?: PhaseBlock[];
+  /** Rolling-window prescribed targets used for adapt-up / adapt-down delta. */
+  prescribedWeek?: PrescribedWeek;
+  /** Recent recovery samples (e.g. Oura) used for trend detection. */
+  recoveryHistory?: RecoverySample[];
+  /** Athlete's plan goal (free text). Used by the LLM layer; deterministic core only reads structure. */
+  goal?: string;
+  /** Structured race context from training_plans.metadata.raceContext. */
+  raceContext?: RaceContext;
+};
+
+export type PhasePosition = {
+  /** Name of the phase the athlete is currently in, or null if outside any phase block. */
+  phaseName: string | null;
+  /** 0-indexed position of the current phase in phaseBlocks. */
+  phaseIndex: number;
+  /** 0-indexed week within the current phase. */
+  weekIndexInPhase: number;
+  /** 0-indexed total week from plan start. */
+  totalWeekIndex: number;
+  /** Whole calendar weeks remaining until raceDate (>= 0; 0 on race week). */
+  weeksToRace: number;
+  /** True when today's week contains the race date. */
+  isRaceWeek: boolean;
+  /** True when the current phase name contains "Taper" (case-insensitive). */
+  isTaper: boolean;
+  /** Convenience: whether raising load is permitted in the current phase. */
+  raiseAllowed: boolean;
+};
+
+export type RecoveryTrendDirection = 'improving' | 'stable' | 'degrading';
+
+export type RecoveryTrend = {
+  direction: RecoveryTrendDirection;
+  /** 0..1 confidence based on sample count, time span, and signal-to-noise. */
+  confidence: number;
+  sampleCount: number;
+};
+
+export type PerformanceSignal = 'over' | 'on' | 'under';
+
+export type PerformanceDelta = {
+  /** (completedVolume - prescribedVolume) / prescribedVolume, or null when no prescription. */
+  volumeDelta: number | null;
+  /** (completedIntensity - prescribedIntensity) / prescribedIntensity, or null when no prescription. */
+  intensityDelta: number | null;
+  signal: PerformanceSignal;
+};
+
+export type PlanAdaptationSuggestion = 'raise' | 'hold' | 'lower';
+
+export type PlanAdaptation = {
+  /** Block-level suggestion for the next phase week, distinct from per-day recommendations. */
+  suggestion: PlanAdaptationSuggestion;
+  /** Proposed percentage change to next block's volume/intensity targets (positive for raise, negative for lower). */
+  magnitudePct: number;
+  reason: string;
 };
 
 export type AdaptiveCoachResult = {
   fatigueState: FatigueState;
   overloadScore: number;
   recommendations: AdaptedRecommendation[];
+  /** Present when raceDate + planStartDate + phaseBlocks are supplied. */
+  phasePosition?: PhasePosition;
+  /** Present when recoveryHistory is supplied. */
+  recoveryTrend?: RecoveryTrend;
+  /** Present when prescribedWeek is supplied. */
+  performanceDelta?: PerformanceDelta;
+  /** Block-level adapt-up / adapt-down suggestion, distinct from per-day recommendations. */
+  planAdaptation?: PlanAdaptation;
 };
 
 export type WorkoutSource = 'apple_health' | 'apple_watch' | 'manual' | 'training_plan';
