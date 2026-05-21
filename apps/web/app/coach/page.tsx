@@ -1,20 +1,10 @@
+import Link from 'next/link';
+
 import { PageHero } from '@/components/layout/page-hero';
 import { Card } from '@/components/ui/card';
 
-const modules = [
-  {
-    title: 'Daily recommendation engine',
-    body: 'Summarizes the delta between plan intent, readiness, adherence, and constraints into an understandable next action.',
-  },
-  {
-    title: 'Weekly review ritual',
-    body: 'Helps athlete and coach revisit trends, adjust upcoming workload, and document rationale for plan changes.',
-  },
-  {
-    title: 'Long-horizon guidance',
-    body: 'Connects biomarkers, sleep consistency, travel, and lifestyle habits to the broader performance thesis.',
-  },
-];
+import { CoachChat } from './coach-chat';
+import { loadCoachPageState } from './coach-data';
 
 const raceAwareSurfaces = [
   {
@@ -35,32 +25,90 @@ const raceAwareSurfaces = [
   },
 ];
 
-export default function CoachPage() {
+export default async function CoachPage() {
+  const state = await loadCoachPageState();
+
   return (
     <main>
       <PageHero
-        eyebrow="Coaching system"
-        title="Recommendations should feel authored, not generated."
-        description="This sample route shows how the app can present intelligence as premium coaching guidance with context, confidence, and clear action steps."
-        badge="Narrative UX direction"
+        eyebrow="Training Coach"
+        title="Talk to the coach. Get the call for today."
+        description="The coach reads your plan, recent workouts, and recovery, then composes the call. Mention pain or strain and the follow-up window opens automatically."
+        badge={state.kind === 'ready' ? 'Live coach' : 'Coach preview'}
       />
-      <section className="shell grid gap-6 pb-8 lg:grid-cols-3">
-        {modules.map((module) => (
-          <Card key={module.title} className="space-y-3">
-            <h2 className="text-xl font-semibold text-white">{module.title}</h2>
-            <p className="text-sm leading-7 text-muted">{module.body}</p>
+
+      <section className="shell pb-8">
+        {state.kind === 'unauthenticated' ? (
+          <Card className="space-y-4">
+            <div>
+              <p className="eyebrow">Sign in to talk to your coach</p>
+              <h2 className="mt-2 text-2xl font-semibold text-white">
+                The coach reads your plan, workouts, and recovery — so it needs to know who you are first.
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-muted">
+                Head to Integrations to send yourself a magic link. Once you're signed in, come back here.
+              </p>
+            </div>
+            <Link
+              href="/settings/integrations"
+              className="inline-flex items-center justify-center self-start rounded-full bg-brand2 px-5 py-2 text-sm font-medium text-black"
+            >
+              Go to Integrations
+            </Link>
           </Card>
-        ))}
+        ) : null}
+
+        {state.kind === 'no-plan' ? (
+          <Card className="space-y-4">
+            <div>
+              <p className="eyebrow">Upload a training plan</p>
+              <h2 className="mt-2 text-2xl font-semibold text-white">
+                The coach needs your plan to answer "what should I do today?"
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-muted">
+                Visit the Plan page to import your workbook. Once your plan is in, race date and phase blocks are available, the coach can start adapting it.
+              </p>
+            </div>
+            <Link
+              href="/plan"
+              className="inline-flex items-center justify-center self-start rounded-full bg-brand2 px-5 py-2 text-sm font-medium text-black"
+            >
+              Go to Plan
+            </Link>
+          </Card>
+        ) : null}
+
+        {state.kind === 'ready' ? (
+          <div className="space-y-4">
+            <Card className="space-y-2">
+              <p className="eyebrow">Active plan</p>
+              <h2 className="text-xl font-semibold text-white">
+                {state.planName ?? 'Imported plan'}
+              </h2>
+              <p className="text-sm leading-6 text-muted">
+                {state.goal ?? 'Goal not set'}
+                {state.raceDate ? ` · race ${state.raceDate}` : ''}
+              </p>
+            </Card>
+            <CoachChat
+              initialMessage={state.latestMessage}
+              initialRecommendations={state.recommendations}
+              initialCautions={state.cautions}
+              initialRationale={state.rationale}
+              initialConversation={state.conversation}
+              initialFollowUp={state.followUp}
+            />
+          </div>
+        ) : null}
       </section>
 
       <section className="shell pb-16">
         <Card className="space-y-4">
           <div>
-            <p className="eyebrow">Training Coach — what the deterministic engine surfaces</p>
-            <h2 className="mt-2 text-2xl font-semibold text-white">Four signals behind every daily recommendation.</h2>
+            <p className="eyebrow">Behind the coach — what the deterministic engine surfaces</p>
+            <h2 className="mt-2 text-2xl font-semibold text-white">Four signals behind every daily call.</h2>
             <p className="mt-2 text-sm leading-6 text-muted">
-              The Training Coach reads four race-aware signals from the deterministic
-              engine before any narrative is composed. See <code className="text-brand2">docs/two-coach-architecture.md</code>
+              The coach reads four race-aware signals from the deterministic engine before any narrative is composed. See <code className="text-brand2">docs/two-coach-architecture.md</code>
               {' '}for the higher-level model and worked examples.
             </p>
           </div>
