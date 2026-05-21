@@ -113,6 +113,17 @@ npm run test --workspace @performance-os/web   # vitest run
 
 LLM is optional. Always preserve deterministic fallback for tests, local dev, and provider outages.
 
+**Two coaches, one engine.** Performance OS runs two LLM-driven agents
+over this 3-layer engine: the **Training Coach** (adaptive, daily, races
+to Swiss Alps 100) and the **Longevity Guru** (strategic, weekly/monthly,
+optimizes healthspan past the race). They share the data layer, share
+auth, cross-influence via `daily_summaries.summary.longevityContext`,
+and resolve conflicts with sustained-signal-wins-for-longevity /
+acute-need-wins-for-training. See `docs/two-coach-architecture.md` for
+the higher-level model, including the Training Coach worked examples
+(adapt-up on healthy over-performance, conversational injury
+management with re-evaluation, phase-aware behavior).
+
 ### Coach memory persistence
 Use `daily_summaries.summary` JSON blob:
 - `coachConversation` — recent athlete/coach messages
