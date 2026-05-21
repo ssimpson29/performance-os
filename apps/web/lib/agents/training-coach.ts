@@ -84,11 +84,12 @@ const POSITIVE_RECOVERY_PATTERNS: RegExp[] = [
 ];
 
 const INJURY_PATTERNS: RegExp[] = [
-  /\bhurts?\b/i,
+  /\bhurt(s|ing)?\b/i,
   /\bpain(ful|s)?\b/i,
   /\b(strain|sprain|tweak)(ed|ing|s)?\b/i,
   /\binjur(y|ed|ies)\b/i,
   /\bsharp\b.*\b(ache|pain)\b/i,
+  /\bach(e|es|ing|y)\b/i,
   /\bswollen\b/i,
   /\binflam(ed|mation)\b/i,
 ];
