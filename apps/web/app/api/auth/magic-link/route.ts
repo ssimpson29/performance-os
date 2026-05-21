@@ -1,5 +1,6 @@
+import { createServerClient } from '@supabase/ssr';
+import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
 
 import { getAppEnv, requireSupabaseEnv } from '@/lib/env';
 
@@ -7,7 +8,6 @@ const ALLOWED_NEXT_PREFIXES = ['/coach', '/longevity', '/plan', '/today', '/sett
 
 function sanitizeNext(raw: string | null): string {
   if (!raw) return '/coach';
-  // Only accept relative paths under known prefixes, to prevent open-redirect.
   if (!raw.startsWith('/') || raw.startsWith('//')) return '/coach';
   if (!ALLOWED_NEXT_PREFIXES.some((p) => raw === p || raw.startsWith(`${p}/`))) {
     return '/coach';
@@ -15,6 +15,17 @@ function sanitizeNext(raw: string | null): string {
   return raw;
 }
 
+/**
+ * Send a Supabase magic-link OTP for sign-in.
+ *
+ * Why @supabase/ssr (not plain createClient): the plain client defaults to
+ * the **implicit** flow — Supabase puts the access token in the URL hash
+ * fragment when the user clicks the link. Hash fragments never reach the
+ * server, so our /auth/callback route can't see them. Using createServerClient
+ * with cookie-backed storage opts into the **PKCE** flow: Supabase issues a
+ * `?code=` we can exchange server-side, and the code_verifier persists in a
+ * cookie so the callback completes the exchange.
+ */
 export async function POST(request: Request) {
   const formData = await request.formData();
   const email = String(formData.get('email') ?? '').trim();
@@ -29,8 +40,18 @@ export async function POST(request: Request) {
   const baseUrl = (appUrl ?? 'http://localhost:3000').replace(/\/$/, '');
   const emailRedirectTo = `${baseUrl}/auth/callback?next=${encodeURIComponent(next)}`;
 
-  const supabase = createClient(supabaseUrl, supabasePublishableKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
+  const cookieStore = await cookies();
+  type CookieToSet = { name: string; value: string; options: Record<string, unknown> };
+
+  const supabase = createServerClient(supabaseUrl, supabasePublishableKey, {
+    cookies: {
+      getAll: () => cookieStore.getAll(),
+      setAll: (cookiesToSet: CookieToSet[]) => {
+        cookiesToSet.forEach(({ name, value, options }: CookieToSet) => {
+          cookieStore.set({ name, value, ...options });
+        });
+      },
+    },
   });
 
   const { error } = await supabase.auth.signInWithOtp({
