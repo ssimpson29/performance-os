@@ -1,15 +1,42 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { expandTrainingPlanCalendar } from './expansion';
-import type { ParsedTrainingPlan } from './types';
+import type { ParsedTrainingPlan, RaceContext } from './types';
+
+export type PersistImportedTrainingPlanOptions = {
+  userId?: string;
+  startDate?: string;
+  endDate?: string;
+  goal?: string;
+  raceContext?: RaceContext;
+};
 
 export async function persistImportedTrainingPlan(
   supabase: SupabaseClient,
   parsed: ParsedTrainingPlan,
-  options?: { startDate?: string; userId?: string },
+  options?: PersistImportedTrainingPlanOptions,
 ) {
   if (!options?.userId) {
     throw new Error('userId is required to persist a training plan import.');
+  }
+
+  // Race context can be supplied directly via options.raceContext, with
+  // top-level endDate/goal options taking precedence when provided. Keep
+  // metadata.raceContext absent when no race context is supplied so the
+  // persisted blob stays minimal for non-race imports.
+  const resolvedEndDate = options.endDate ?? options.raceContext?.raceDate ?? null;
+  const resolvedGoal = options.goal ?? options.raceContext?.goal ?? null;
+
+  const metadata: Record<string, unknown> = {
+    sourceFileName: parsed.sourceFileName,
+    sheetNames: parsed.sheetNames,
+    weeklyStructure: parsed.weeklyStructure,
+    phaseBlocks: parsed.phaseBlocks,
+    supportTemplates: parsed.supportTemplates,
+  };
+
+  if (options.raceContext) {
+    metadata.raceContext = options.raceContext;
   }
 
   const { data: plan, error: planError } = await supabase
@@ -20,12 +47,9 @@ export async function persistImportedTrainingPlan(
       source: 'xlsx-import',
       description: `Imported from ${parsed.sourceFileName}`,
       start_date: options.startDate ?? null,
-      metadata: {
-        sourceFileName: parsed.sourceFileName,
-        sheetNames: parsed.sheetNames,
-        phaseBlocks: parsed.phaseBlocks,
-        supportTemplates: parsed.supportTemplates,
-      },
+      end_date: resolvedEndDate,
+      goal: resolvedGoal,
+      metadata,
     })
     .select('id')
     .single();

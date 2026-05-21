@@ -49,6 +49,15 @@ export type ParsedTrainingPlan = {
   supportTemplates: SupportTemplate[];
 };
 
+export type RaceContext = {
+  raceName: string;
+  raceDate: string;
+  distanceKm?: number;
+  elevationGainM?: number;
+  goal?: string;
+  notes?: string;
+};
+
 export type ExpandedTrainingSession = {
   sessionDate: string;
   phaseName: string;
