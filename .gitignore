@@ -6,6 +6,7 @@ coverage
 dist
 build
 npm-debug.log*
+*.tsbuildinfo
 
 # Secrets / local env
 .env*
