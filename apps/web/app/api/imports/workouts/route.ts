@@ -1,18 +1,19 @@
 import { NextResponse } from 'next/server';
 
+import { getAuthenticatedUserId } from '@/lib/server-auth';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { importActualWorkouts } from '@/lib/training-plan/workout-ingestion';
 import type { ActualWorkoutInput } from '@/lib/training-plan/types';
 
 export async function POST(request: Request) {
+  const userId = await getAuthenticatedUserId();
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const body = (await request.json()) as {
-    userId?: string;
     workouts?: ActualWorkoutInput[];
   };
-
-  if (!body.userId) {
-    return NextResponse.json({ error: 'Missing userId' }, { status: 400 });
-  }
 
   if (!Array.isArray(body.workouts) || body.workouts.length === 0) {
     return NextResponse.json({ error: 'Missing workouts payload' }, { status: 400 });
@@ -20,7 +21,7 @@ export async function POST(request: Request) {
 
   const supabase = createServerSupabaseClient();
   const result = await importActualWorkouts(supabase, {
-    userId: body.userId,
+    userId,
     workouts: body.workouts,
   });
 

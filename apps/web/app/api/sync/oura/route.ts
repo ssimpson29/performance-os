@@ -1,23 +1,24 @@
 import { NextResponse } from 'next/server';
 
 import { syncOuraRecovery, OuraRecoverySyncError } from '@/lib/oura/recovery-sync';
+import { getAuthenticatedUserId } from '@/lib/server-auth';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 
 export async function POST(request: Request) {
+  const userId = await getAuthenticatedUserId();
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const body = (await request.json()) as {
-    userId?: string;
     startDate?: string;
     endDate?: string;
   };
 
-  if (!body.userId) {
-    return NextResponse.json({ error: 'Missing userId' }, { status: 400 });
-  }
-
   try {
     const supabase = createServerSupabaseClient();
     const result = await syncOuraRecovery(supabase, {
-      userId: body.userId,
+      userId,
       startDate: body.startDate,
       endDate: body.endDate,
     });

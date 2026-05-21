@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 
+import { getAuthenticatedUserId } from '@/lib/server-auth';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { adaptWeeklyStructure } from '@/lib/training-plan/adaptive-coach';
 import { expandTrainingPlanCalendar } from '@/lib/training-plan/expansion';
@@ -8,18 +9,18 @@ import { persistImportedTrainingPlan } from '@/lib/training-plan/persistence';
 import type { CompletedWorkout } from '@/lib/training-plan/types';
 
 export async function POST(request: Request) {
+  const userId = await getAuthenticatedUserId();
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const formData = await request.formData();
   const file = formData.get('file');
-  const userId = String(formData.get('userId') ?? '');
   const startDate = String(formData.get('startDate') ?? '');
   const completedWorkoutsJson = String(formData.get('completedWorkouts') ?? '[]');
 
   if (!(file instanceof File)) {
     return NextResponse.json({ error: 'Missing workbook file' }, { status: 400 });
-  }
-
-  if (!userId) {
-    return NextResponse.json({ error: 'Missing userId' }, { status: 400 });
   }
 
   const completedWorkouts = JSON.parse(completedWorkoutsJson) as CompletedWorkout[];
