@@ -1,155 +1,181 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-
 import Link from 'next/link';
 
 import { PageHero } from '@/components/layout/page-hero';
 import { Card } from '@/components/ui/card';
+import { getAuthenticatedUser } from '@/lib/server-auth';
+import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { adaptWeeklyStructure } from '@/lib/training-plan/adaptive-coach';
-import { parseTrainingPlanWorkbook } from '@/lib/training-plan/parser';
+import type { AdaptiveCoachResult, PhaseBlock, SupportTemplate, WeeklyStructureSession } from '@/lib/training-plan/types';
 
+import { loadAdaptiveCoachContext, loadActiveTrainingPlan } from './coach-data';
 import { buildPlanVsActualPreview, loadPlanVsActualPreview } from './plan-vs-actual-data';
 import { PlanVsActualSection } from './plan-vs-actual-section';
 
-async function getImportedPlanPreview() {
-  const fixturePath = join(process.cwd(), 'tests/fixtures/Swiss Alps 100.xlsx');
-  const parsed = parseTrainingPlanWorkbook(readFileSync(fixturePath), 'Swiss Alps 100.xlsx');
-  // Demo inputs: an athlete 12 weeks into the plan with a healthy
-  // over-performing trend (recovery stable in mid-70s, prescribed-vs-completed
-  // delta positive). This exercises the race-aware adapt-up logic so the
-  // page demonstrates the full engine, not just the legacy weekend-overload
-  // heuristic.
-  const demoToday = '2026-04-27'; // ~14 weeks into the plan, race week 26 is 2026-08-03
-  const demoRecoveryHistory = Array.from({ length: 10 }, (_, i) => ({
-    date: `2026-04-${String(18 + i).padStart(2, '0')}`,
-    score: 76 + (i % 3),
-  }));
-  const adaptivePreview = adaptWeeklyStructure({
-    weeklyStructure: parsed.weeklyStructure,
-    completedWorkouts: [
-      { day: 'Saturday', durationMinutes: 210, intensityScore: 6, loadScore: 180, sessionType: 'Long Run' },
-      { day: 'Sunday', durationMinutes: 150, intensityScore: 5, loadScore: 120, sessionType: 'Aerobic Recovery' },
-    ],
-    currentDay: 'Monday',
-    recoveryScore: 78,
-    today: demoToday,
-    planStartDate: '2026-02-02',
-    raceDate: '2026-08-07',
-    phaseBlocks: parsed.phaseBlocks,
-    prescribedWeek: { volumeTarget: 280, intensityTarget: 5 },
-    recoveryHistory: demoRecoveryHistory,
-  });
+type PlanView =
+  | { kind: 'unauthenticated' }
+  | { kind: 'no-plan' }
+  | {
+      kind: 'ready';
+      planName: string;
+      goal: string | null;
+      raceDate: string | null;
+      planStartDate: string | null;
+      weeklyStructure: WeeklyStructureSession[];
+      phaseBlocks: PhaseBlock[];
+      supportTemplates: SupportTemplate[];
+      adaptive: AdaptiveCoachResult;
+    };
 
-  const planVsActualPreview = await loadPlanVsActualPreview();
+type TrainingPlanRow = {
+  name: string | null;
+  metadata: Record<string, unknown> | null;
+};
 
-  return { parsed, adaptivePreview, planVsActualPreview: planVsActualPreview.dataSource === 'live' ? planVsActualPreview : buildPlanVsActualPreview() };
+async function loadPlanView(): Promise<PlanView> {
+  const user = await getAuthenticatedUser();
+  if (!user) return { kind: 'unauthenticated' };
+
+  const supabase = createServerSupabaseClient();
+  const plan = await loadActiveTrainingPlan(supabase, user.id);
+  if (!plan) return { kind: 'no-plan' };
+
+  // Pull plan name + supportTemplates directly (the data loader doesn't carry them).
+  const { data: rows } = await supabase
+    .from('training_plans')
+    .select('name, metadata')
+    .eq('id', plan.planId)
+    .limit(1);
+  const planRow = ((rows as TrainingPlanRow[] | null) ?? [])[0];
+  const supportTemplates =
+    (planRow?.metadata?.supportTemplates as SupportTemplate[] | undefined) ?? [];
+  const planName = planRow?.name ?? 'Imported plan';
+
+  // Run the race-aware engine against today's athlete state.
+  const today = new Date().toISOString().slice(0, 10);
+  const coachInput = await loadAdaptiveCoachContext(supabase, user.id, { today });
+  const adaptive = adaptWeeklyStructure(coachInput);
+
+  return {
+    kind: 'ready',
+    planName,
+    goal: plan.goal,
+    raceDate: plan.raceDate,
+    planStartDate: plan.planStartDate,
+    weeklyStructure: plan.weeklyStructure,
+    phaseBlocks: plan.phaseBlocks,
+    supportTemplates,
+    adaptive,
+  };
 }
 
 export default async function PlanPage() {
-  const { parsed, adaptivePreview, planVsActualPreview } = await getImportedPlanPreview();
+  const view = await loadPlanView();
+
+  if (view.kind === 'unauthenticated') {
+    return (
+      <main>
+        <PageHero
+          eyebrow="Plan"
+          title="Your training plan, the race-aware engine, and the coach all hang off this surface."
+          description="Sign in to import a workbook and see your live plan. Until then this is a description, not your data."
+          badge="Plan preview"
+        />
+        <section className="shell pb-16">
+          <Card className="space-y-4">
+            <div>
+              <p className="eyebrow">Sign in to see your plan</p>
+              <h2 className="mt-2 text-2xl font-semibold text-white">
+                The plan page reads your imported training_plans row and runs the adaptive engine on today&apos;s state.
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-muted">
+                Head to Integrations to send yourself a magic link. After signing in, come back here.
+              </p>
+            </div>
+            <Link
+              href="/settings/integrations"
+              className="inline-flex items-center justify-center self-start rounded-full bg-brand2 px-5 py-2 text-sm font-medium text-black"
+            >
+              Go to Integrations
+            </Link>
+          </Card>
+        </section>
+      </main>
+    );
+  }
+
+  if (view.kind === 'no-plan') {
+    return (
+      <main>
+        <PageHero
+          eyebrow="Plan"
+          title="Import a training plan to get started."
+          description="The plan workbook becomes the backbone of the race-aware coach. The parser handles weekly structure, phase blocks, support templates, and race context."
+          badge="No plan imported yet"
+        />
+        <section className="shell pb-16">
+          <Card className="space-y-4">
+            <div>
+              <p className="eyebrow">Upload an Excel training plan</p>
+              <h2 className="mt-2 text-2xl font-semibold text-white">
+                The coach needs a plan before it can answer &ldquo;what should I do today?&rdquo;
+              </h2>
+            </div>
+            <Link
+              href="/plan/import"
+              className="inline-flex items-center justify-center self-start rounded-full bg-brand2 px-5 py-2 text-sm font-medium text-black"
+            >
+              Import a plan
+            </Link>
+          </Card>
+        </section>
+      </main>
+    );
+  }
+
+  // Plan-vs-actual section — falls back to sample data when no live data is present.
+  const planVsActualPreview = await loadPlanVsActualPreview();
+  const effectivePlanVsActual =
+    planVsActualPreview.dataSource === 'live' ? planVsActualPreview : buildPlanVsActualPreview();
+
+  const phaseName = view.adaptive.phasePosition?.phaseName ?? 'Phase unknown';
+  const weeksToRace = view.adaptive.phasePosition?.weeksToRace;
+  const planAdaptation = view.adaptive.planAdaptation;
+  const recoveryTrend = view.adaptive.recoveryTrend;
+  const performanceDelta = view.adaptive.performanceDelta;
 
   return (
     <main>
       <PageHero
-        eyebrow="Training architecture"
-        title="Programming that stays legible from quarter to workout."
-        description="The coach uses weekly structure as the base, then adapts Monday and Tuesday based on what actually happened over the weekend and how recovered the athlete is."
-        badge="Excel import + adaptive coaching"
+        eyebrow="Training plan"
+        title={view.planName}
+        description={
+          view.goal
+            ? `Goal: ${view.goal}.${view.raceDate ? ` Race ${view.raceDate}.` : ''}`
+            : `Imported plan ${view.raceDate ? `targeting ${view.raceDate}` : ''}`.trim()
+        }
+        badge={weeksToRace != null ? `${weeksToRace} weeks to race` : 'Plan loaded'}
       />
+
       <section className="shell pb-4">
-        <Card className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div>
-            <p className="eyebrow">Have your own training plan?</p>
-            <h2 className="mt-1 text-lg font-semibold text-white">Upload an Excel workbook to use the coach with your plan.</h2>
-            <p className="mt-1 text-sm text-muted">Parses weekly structure, phase blocks, and support templates. Sign-in required.</p>
-          </div>
-          <Link
-            href="/plan/import"
-            className="inline-flex items-center self-start rounded-full bg-brand2 px-5 py-2 text-sm font-medium text-black md:self-auto"
-          >
-            Import your plan
-          </Link>
-        </Card>
-      </section>
-      <section className="shell grid gap-6 pb-8 lg:grid-cols-3">
-        <Card className="space-y-4 lg:col-span-3">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="eyebrow">Imported workbook preview</p>
-              <h2 className="mt-2 text-2xl font-semibold text-white">{parsed.planName}</h2>
-              <p className="mt-2 text-sm leading-6 text-muted">
-                {parsed.phaseBlocks.length} phases, {parsed.weeklyStructure.length} weekly anchor sessions, and {parsed.supportTemplates.length} support templates parsed from the uploaded workbook.
-              </p>
-            </div>
-            <span className="text-sm text-brand2">Weekly structure is the base layer</span>
-          </div>
-          <div className="grid gap-4 md:grid-cols-3">
-            {parsed.phaseBlocks.slice(0, 3).map((block) => (
-              <div key={block.phaseName} className="rounded-2xl border border-white/5 bg-white/[0.03] p-5">
-                <p className="text-xs uppercase tracking-[0.18em] text-brand2">{block.weeks.length} weeks</p>
-                <h3 className="mt-2 text-lg font-semibold text-white">{block.phaseName}</h3>
-                <p className="mt-3 text-sm leading-6 text-muted">
-                  First target: {block.weeks[0]?.mileageTarget} miles / {block.weeks[0]?.vertTarget} vert / fuel {block.weeks[0]?.fuelTarget}
-                </p>
-              </div>
-            ))}
-          </div>
-        </Card>
-
-        {parsed.weeklyStructure.map((session) => (
-          <Card key={session.day} className="space-y-4">
-            <div>
-              <p className="text-sm text-brand2">{session.day}</p>
-              <h2 className="mt-2 text-xl font-semibold text-white">{session.runSession}</h2>
-            </div>
-            <p className="text-sm leading-6 text-muted">{session.details}</p>
-            <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-4 text-sm text-muted">
-              <p className="font-medium text-white">Support work</p>
-              <p className="mt-2">{session.strengthMobility}</p>
-            </div>
-          </Card>
-        ))}
-      </section>
-
-      <PlanVsActualSection preview={planVsActualPreview} />
-
-      <section className="shell pb-8">
         <Card className="space-y-4">
           <div>
-            <p className="eyebrow">Race-aware engine</p>
-            <h2 className="mt-2 text-2xl font-semibold text-white">Phase position and plan-level adaptation.</h2>
-            <p className="mt-2 text-sm leading-6 text-muted">
-              The deterministic coach reads the active plan, recent workouts, and recovery
-              trend to know where the athlete is in the race build and whether the next
-              block should hold, raise, or lower its load.
-            </p>
+            <p className="eyebrow">Race-aware engine — today&apos;s read</p>
+            <h2 className="mt-2 text-2xl font-semibold text-white">
+              {phaseName}
+              {view.adaptive.phasePosition?.isRaceWeek ? ' · race week' : view.adaptive.phasePosition?.isTaper ? ' · taper' : ''}
+            </h2>
           </div>
           <div className="grid gap-4 md:grid-cols-2">
             <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-5">
-              <p className="text-xs uppercase tracking-[0.18em] text-brand2">Phase position</p>
-              {adaptivePreview.phasePosition ? (
-                <>
-                  <h3 className="mt-2 text-lg font-semibold text-white">{adaptivePreview.phasePosition.phaseName ?? 'Unknown phase'}</h3>
-                  <p className="mt-3 text-sm leading-6 text-muted">
-                    Week {adaptivePreview.phasePosition.weekIndexInPhase + 1} of phase ·
-                    {' '}{adaptivePreview.phasePosition.weeksToRace} weeks to race ·
-                    {' '}{adaptivePreview.phasePosition.isRaceWeek ? 'race week' : adaptivePreview.phasePosition.isTaper ? 'taper' : adaptivePreview.phasePosition.raiseAllowed ? 'raises allowed' : 'raises locked'}
-                  </p>
-                </>
-              ) : (
-                <p className="mt-3 text-sm text-muted">Phase data unavailable.</p>
-              )}
-            </div>
-            <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-5">
               <p className="text-xs uppercase tracking-[0.18em] text-brand2">Plan-level adaptation</p>
-              {adaptivePreview.planAdaptation ? (
+              {planAdaptation ? (
                 <>
                   <h3 className="mt-2 text-lg font-semibold text-white">
-                    {adaptivePreview.planAdaptation.suggestion === 'raise' && `Raise next block ~${adaptivePreview.planAdaptation.magnitudePct}%`}
-                    {adaptivePreview.planAdaptation.suggestion === 'hold' && 'Hold next block'}
-                    {adaptivePreview.planAdaptation.suggestion === 'lower' && `Lower next block ~${Math.abs(adaptivePreview.planAdaptation.magnitudePct)}%`}
+                    {planAdaptation.suggestion === 'raise' && `Raise next block ~${planAdaptation.magnitudePct}%`}
+                    {planAdaptation.suggestion === 'hold' && 'Hold next block'}
+                    {planAdaptation.suggestion === 'lower' && `Lower next block ~${Math.abs(planAdaptation.magnitudePct)}%`}
                   </h3>
-                  <p className="mt-3 text-sm leading-6 text-muted">{adaptivePreview.planAdaptation.reason}</p>
+                  <p className="mt-3 text-sm leading-6 text-muted">{planAdaptation.reason}</p>
                 </>
               ) : (
                 <p className="mt-3 text-sm text-muted">No block-level change recommended right now.</p>
@@ -157,82 +183,117 @@ export default async function PlanPage() {
             </div>
             <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-5">
               <p className="text-xs uppercase tracking-[0.18em] text-brand2">Recovery trend</p>
-              {adaptivePreview.recoveryTrend ? (
+              {recoveryTrend ? (
                 <>
-                  <h3 className="mt-2 text-lg font-semibold text-white capitalize">{adaptivePreview.recoveryTrend.direction}</h3>
+                  <h3 className="mt-2 text-lg font-semibold capitalize text-white">{recoveryTrend.direction}</h3>
                   <p className="mt-3 text-sm leading-6 text-muted">
-                    Confidence {Math.round(adaptivePreview.recoveryTrend.confidence * 100)}% over {adaptivePreview.recoveryTrend.sampleCount} samples.
+                    Confidence {Math.round(recoveryTrend.confidence * 100)}% over {recoveryTrend.sampleCount} samples.
                   </p>
                 </>
               ) : (
-                <p className="mt-3 text-sm text-muted">No recovery history supplied.</p>
+                <p className="mt-3 text-sm text-muted">No recent recovery samples in the database.</p>
               )}
             </div>
             <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-5">
               <p className="text-xs uppercase tracking-[0.18em] text-brand2">Performance vs. plan</p>
-              {adaptivePreview.performanceDelta ? (
+              {performanceDelta ? (
                 <>
-                  <h3 className="mt-2 text-lg font-semibold text-white capitalize">{adaptivePreview.performanceDelta.signal}</h3>
+                  <h3 className="mt-2 text-lg font-semibold capitalize text-white">{performanceDelta.signal}</h3>
                   <p className="mt-3 text-sm leading-6 text-muted">
-                    Volume delta {adaptivePreview.performanceDelta.volumeDelta == null ? 'n/a' : `${(adaptivePreview.performanceDelta.volumeDelta * 100).toFixed(0)}%`} ·
-                    {' '}intensity delta {adaptivePreview.performanceDelta.intensityDelta == null ? 'n/a' : `${(adaptivePreview.performanceDelta.intensityDelta * 100).toFixed(0)}%`}
+                    Volume delta {performanceDelta.volumeDelta == null ? 'n/a' : `${(performanceDelta.volumeDelta * 100).toFixed(0)}%`} ·
+                    {' '}intensity delta {performanceDelta.intensityDelta == null ? 'n/a' : `${(performanceDelta.intensityDelta * 100).toFixed(0)}%`}
                   </p>
                 </>
               ) : (
-                <p className="mt-3 text-sm text-muted">No prescribed week supplied.</p>
+                <p className="mt-3 text-sm text-muted">No prescribed-week target supplied for delta calc.</p>
               )}
             </div>
+            <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-5">
+              <p className="text-xs uppercase tracking-[0.18em] text-brand2">Fatigue state</p>
+              <h3 className="mt-2 text-lg font-semibold capitalize text-white">{view.adaptive.fatigueState}</h3>
+              <p className="mt-3 text-sm leading-6 text-muted">
+                Weekend overload score {view.adaptive.overloadScore.toFixed(0)}.
+              </p>
+            </div>
           </div>
+          {view.adaptive.recommendations.length ? (
+            <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-5">
+              <p className="text-xs uppercase tracking-[0.18em] text-brand2">Today&apos;s per-day recommendations</p>
+              <ul className="mt-2 space-y-2 text-sm text-muted">
+                {view.adaptive.recommendations.map((rec) => (
+                  <li key={rec.day}>
+                    <span className="text-white">{rec.day}:</span> {rec.recommendedSessionType} —{' '}
+                    <span className="text-xs uppercase tracking-[0.18em] text-amber-300">{rec.action}</span>{' '}
+                    <span className="text-xs text-muted">{rec.reason}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </Card>
       </section>
 
-      <section className="shell grid gap-6 pb-16 lg:grid-cols-2">
-        <Card className="space-y-4">
+      <section className="shell grid gap-6 pb-8 lg:grid-cols-3">
+        <Card className="space-y-4 lg:col-span-3">
           <div>
-            <p className="eyebrow">Adaptive coach example</p>
-            <h2 className="mt-2 text-2xl font-semibold text-white">Weekend overload changes Monday and Tuesday.</h2>
+            <p className="eyebrow">Phase blocks</p>
+            <h2 className="mt-2 text-xl font-semibold text-white">{view.phaseBlocks.length} phases on file.</h2>
           </div>
-          <p className="text-sm leading-6 text-muted">
-            After two very long, intense back-to-back weekend sessions, the coach downgrades Monday and defers Tuesday quality rather than blindly following the base sheet.
-          </p>
-          <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-4 text-sm text-muted">
-            <p className="font-medium text-white">Fatigue state: {adaptivePreview.fatigueState}</p>
-            <p className="mt-2">Overload score: {adaptivePreview.overloadScore.toFixed(0)}</p>
-          </div>
-          <div className="space-y-3">
-            {adaptivePreview.recommendations.map((recommendation) => (
-              <div key={recommendation.day} className="rounded-2xl border border-white/5 bg-white/[0.03] p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="font-medium text-white">{recommendation.day}</p>
-                  <span className="text-xs uppercase tracking-[0.18em] text-brand2">{recommendation.action}</span>
-                </div>
-                <p className="mt-2 text-sm text-muted">
-                  Base: {recommendation.baseSessionType} → Recommended: {recommendation.recommendedSessionType}
-                </p>
-                <p className="mt-2 text-sm text-muted">{recommendation.reason}</p>
+          <div className="grid gap-4 md:grid-cols-3">
+            {view.phaseBlocks.slice(0, 6).map((block) => (
+              <div key={block.phaseName} className="rounded-2xl border border-white/5 bg-white/[0.03] p-5">
+                <p className="text-xs uppercase tracking-[0.18em] text-brand2">{block.weeks.length} weeks</p>
+                <h3 className="mt-2 text-lg font-semibold text-white">{block.phaseName}</h3>
+                {block.weeks[0] ? (
+                  <p className="mt-3 text-sm leading-6 text-muted">
+                    First week: {block.weeks[0].mileageTarget} miles / {block.weeks[0].vertTarget}{block.weeks[0].fuelTarget ? ` / fuel ${block.weeks[0].fuelTarget}` : ''}
+                  </p>
+                ) : null}
               </div>
             ))}
           </div>
         </Card>
 
-        <Card className="space-y-4">
-          <div>
-            <p className="eyebrow">Support templates</p>
-            <h2 className="mt-2 text-2xl font-semibold text-white">Accessory work is preserved as reusable modules.</h2>
-          </div>
-          <div className="space-y-3">
-            {parsed.supportTemplates.map((template) => (
-              <div key={template.name} className="rounded-2xl border border-white/5 bg-white/[0.03] p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="font-medium text-white">{template.name}</p>
-                  <span className="text-xs uppercase tracking-[0.18em] text-brand2">{template.sourceSheet}</span>
-                </div>
-                <p className="mt-2 text-sm text-muted">{template.items.length} movements or protocol items imported.</p>
+        {view.weeklyStructure.map((session) => (
+          <Card key={session.day} className="space-y-4">
+            <div>
+              <p className="text-sm text-brand2">{session.day}</p>
+              <h2 className="mt-2 text-xl font-semibold text-white">{session.runSession}</h2>
+            </div>
+            <p className="text-sm leading-6 text-muted">{session.details}</p>
+            {session.strengthMobility ? (
+              <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-4 text-sm text-muted">
+                <p className="font-medium text-white">Support work</p>
+                <p className="mt-2">{session.strengthMobility}</p>
               </div>
-            ))}
-          </div>
-        </Card>
+            ) : null}
+          </Card>
+        ))}
       </section>
+
+      <PlanVsActualSection preview={effectivePlanVsActual} />
+
+      {view.supportTemplates.length ? (
+        <section className="shell pb-16">
+          <Card className="space-y-4">
+            <div>
+              <p className="eyebrow">Support templates</p>
+              <h2 className="mt-2 text-xl font-semibold text-white">{view.supportTemplates.length} reusable modules.</h2>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              {view.supportTemplates.map((template) => (
+                <div key={template.name} className="rounded-2xl border border-white/5 bg-white/[0.03] p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="font-medium text-white">{template.name}</p>
+                    <span className="text-xs uppercase tracking-[0.18em] text-brand2">{template.sourceSheet}</span>
+                  </div>
+                  <p className="mt-2 text-sm text-muted">{template.items.length} items.</p>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </section>
+      ) : null}
     </main>
   );
 }
