@@ -92,6 +92,21 @@ npm run test --workspace @performance-os/web   # vitest run
 - Browser/UI flows derive athlete from Supabase auth cookies via
   `getAuthenticatedUserId()` or `getAuthenticatedUser()` (in
   `apps/web/lib/server-auth.ts`).
+- **Session lifecycle:**
+  - `apps/web/middleware.ts` runs on every request, builds a Supabase
+    SSR client with full `getAll`/`setAll` cookie wiring, and calls
+    `supabase.auth.getUser()` to refresh expired access tokens. Without
+    this, `getAuthenticatedUser()` would start returning null after the
+    access token expired (~1 hour) even with a valid refresh token.
+  - `apps/web/app/auth/callback/route.ts` is the magic-link landing
+    handler: it reads `?code=` and `?next=`, calls
+    `supabase.auth.exchangeCodeForSession()` to write the session
+    cookies, then redirects to the sanitized `?next=` (default
+    `/coach`). On error it redirects to `/settings/integrations?auth_error=...`.
+  - `POST /api/auth/magic-link` sets `emailRedirectTo` to
+    `/auth/callback?next=...` and sanitizes `next` to a known prefix
+    list (`/coach`, `/longevity`, `/plan`, `/today`, `/settings`) to
+    prevent open-redirect.
 - **Never** trust `userId` from query, body, or form data on
   browser-driven routes.
 - Routes converted to auth-scoped:
