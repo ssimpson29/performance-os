@@ -4,30 +4,21 @@ import { OuraUserBindingCard } from '@/components/integrations/oura-user-binding
 import { SignInCard } from '@/components/integrations/sign-in-card';
 import { buildAppleHealthPushUrl } from '@/lib/apple-health/automation';
 import { getSupabaseEnv, hasSupabaseEnv, hasSupabaseServiceRoleEnv } from '@/lib/env';
+import { getAuthenticatedUser } from '@/lib/server-auth';
 import { integrations } from '@/lib/site';
-import { createServerSupabaseClient } from '@/lib/supabase-server';
 
-async function getLatestSupabaseUser() {
-  if (!hasSupabaseServiceRoleEnv()) {
-    return null;
-  }
-
-  const supabase = createServerSupabaseClient();
-  const { data, error } = await supabase
-    .from('users')
-    .select('id, email')
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error || !data?.id || !data?.email) {
-    return null;
-  }
-
-  return {
-    id: String(data.id),
-    email: String(data.email),
-  };
+/**
+ * Resolve the athlete from the real auth cookie (lib/server-auth), not from
+ * 'latest user in the users table'. Earlier versions of this page used a
+ * service-role shortcut that returned the most-recently-created row — which
+ * made the page think someone was signed in even when no one was, hiding the
+ * SignInCard. Use real auth so the sign-in UI shows up when (and only when)
+ * the visitor is unauthenticated.
+ */
+async function resolveCurrentUser(): Promise<{ id: string; email: string } | null> {
+  const user = await getAuthenticatedUser();
+  if (!user) return null;
+  return { id: user.id, email: user.email ?? '' };
 }
 
 export default async function IntegrationsPage() {
@@ -35,7 +26,7 @@ export default async function IntegrationsPage() {
   const supabaseServerReady = hasSupabaseServiceRoleEnv();
   const { supabaseUrl } = getSupabaseEnv();
   const projectHost = supabaseUrl ? new URL(supabaseUrl).host : null;
-  const currentUser = await getLatestSupabaseUser();
+  const currentUser = await resolveCurrentUser();
   const appleHealthPushUrl = currentUser ? buildAppleHealthPushUrl(currentUser.id) : null;
 
   return (
