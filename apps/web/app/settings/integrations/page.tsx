@@ -1,6 +1,7 @@
 import { PageHero } from '@/components/layout/page-hero';
 import { Card } from '@/components/ui/card';
 import { OuraUserBindingCard } from '@/components/integrations/oura-user-binding-card';
+import { SignInCard } from '@/components/integrations/sign-in-card';
 import { buildAppleHealthPushUrl } from '@/lib/apple-health/automation';
 import { getSupabaseEnv, hasSupabaseEnv, hasSupabaseServiceRoleEnv } from '@/lib/env';
 import { integrations } from '@/lib/site';
@@ -46,6 +47,11 @@ export default async function IntegrationsPage() {
         badge="Settings / Integrations"
       />
       <section className="shell grid gap-6 pb-8 md:grid-cols-2">
+        {currentUser ? null : (
+          <div className="md:col-span-2">
+            <SignInCard />
+          </div>
+        )}
         <Card className="space-y-4 md:col-span-2">
           <div className="flex items-center justify-between gap-3">
             <div>
@@ -76,16 +82,18 @@ export default async function IntegrationsPage() {
           </div>
         </Card>
 
-        <Card className="space-y-4">
-          <div>
-            <p className="eyebrow">Oura setup</p>
-            <h2 className="mt-2 text-xl font-semibold text-white">Bind an app user before storing Oura tokens.</h2>
-            <p className="mt-2 text-sm leading-6 text-muted">
-              The first step is creating or signing in an athlete profile. The magic link form is always available here, and a recent user record can be used as a shortcut when connecting Oura.
-            </p>
-          </div>
-          <OuraUserBindingCard currentUser={currentUser} />
-        </Card>
+        {currentUser ? (
+          <Card className="space-y-4">
+            <div>
+              <p className="eyebrow">Oura setup</p>
+              <h2 className="mt-2 text-xl font-semibold text-white">Connect Oura to the signed-in athlete.</h2>
+              <p className="mt-2 text-sm leading-6 text-muted">
+                Recovery, sleep, and readiness sync into Supabase via OAuth once Oura is bound to your athlete profile.
+              </p>
+            </div>
+            <OuraUserBindingCard currentUser={currentUser} />
+          </Card>
+        ) : null}
 
         <Card className="space-y-4">
           <div>

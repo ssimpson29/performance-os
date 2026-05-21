@@ -5,55 +5,40 @@ export type OuraBindingUser = {
   email: string;
 };
 
-export function OuraUserBindingCard({ currentUser }: { currentUser: OuraBindingUser | null }) {
+/**
+ * Post-auth Oura connection card. Renders only when an athlete is signed
+ * in (currentUser is non-null). The sign-in step lives in SignInCard,
+ * rendered at the top of /settings/integrations when currentUser is null.
+ */
+export function OuraUserBindingCard({ currentUser }: { currentUser: OuraBindingUser }) {
   return React.createElement(
     'div',
     { className: 'rounded-2xl border border-white/5 bg-white/[0.03] p-5' },
-    React.createElement('p', { className: 'eyebrow' }, 'Oura user binding'),
+    React.createElement('p', { className: 'eyebrow' }, 'Oura connection'),
     React.createElement(
       'h3',
       { className: 'mt-2 text-xl font-semibold text-white' },
-      'Sign in with email',
+      'Connect your Oura account.',
     ),
     React.createElement(
       'p',
       { className: 'mt-2 text-sm leading-6 text-muted' },
-      'Send a Supabase magic link to create or sign in the athlete profile. Connect Oura after you sign in.',
+      'OAuth-binds your Oura account to the athlete profile so recovery, sleep, and readiness sync into Supabase.',
     ),
     React.createElement(
-      'form',
-      { action: '/api/auth/magic-link', method: 'post', className: 'mt-4 space-y-3' },
-      React.createElement('input', {
-        type: 'email',
-        name: 'email',
-        placeholder: 'athlete@example.com',
-        className: 'w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white outline-none',
-      }),
+      'div',
+      { className: 'mt-4 rounded-2xl border border-white/5 bg-black/20 p-4' },
+      React.createElement('p', { className: 'text-xs uppercase tracking-[0.18em] text-brand2' }, 'Signed in as'),
+      React.createElement('p', { className: 'mt-2 text-sm font-medium text-white' }, currentUser.email),
+      React.createElement('p', { className: 'mt-2 text-sm text-muted' }, `User ID: ${currentUser.id}`),
       React.createElement(
-        'button',
+        'a',
         {
-          type: 'submit',
-          className: 'rounded-full border border-white/10 bg-white/10 px-4 py-2 text-sm font-medium text-white',
+          href: `/api/imports/oura/connect?userId=${encodeURIComponent(currentUser.id)}`,
+          className: 'mt-4 inline-flex rounded-full bg-brand2 px-4 py-2 text-sm font-medium text-black',
         },
-        'Send magic link',
+        'Connect Oura',
       ),
     ),
-    currentUser
-      ? React.createElement(
-          'div',
-          { className: 'mt-4 rounded-2xl border border-white/5 bg-black/20 p-4' },
-          React.createElement('p', { className: 'text-xs uppercase tracking-[0.18em] text-brand2' }, 'Latest Supabase user record'),
-          React.createElement('p', { className: 'mt-2 text-sm font-medium text-white' }, currentUser.email),
-          React.createElement('p', { className: 'mt-2 text-sm text-muted' }, `User ID: ${currentUser.id}`),
-          React.createElement(
-            'a',
-            {
-              href: `/api/imports/oura/connect?userId=${encodeURIComponent(currentUser.id)}`,
-              className: 'mt-4 inline-flex rounded-full border border-white/10 bg-white/10 px-4 py-2 text-sm font-medium text-white',
-            },
-            'Connect Oura',
-          ),
-        )
-      : React.createElement('p', { className: 'mt-3 text-xs text-muted' }, 'Connect Oura after you sign in.'),
   );
 }
