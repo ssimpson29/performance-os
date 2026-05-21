@@ -46,7 +46,7 @@ export default async function CoachPage() {
                 The coach reads your plan, workouts, and recovery — so it needs to know who you are first.
               </h2>
               <p className="mt-2 text-sm leading-6 text-muted">
-                Head to Integrations to send yourself a magic link. Once you're signed in, come back here.
+                Head to Integrations to send yourself a magic link. Once you&apos;re signed in, come back here.
               </p>
             </div>
             <Link
@@ -63,7 +63,7 @@ export default async function CoachPage() {
             <div>
               <p className="eyebrow">Upload a training plan</p>
               <h2 className="mt-2 text-2xl font-semibold text-white">
-                The coach needs your plan to answer "what should I do today?"
+                The coach needs your plan to answer &ldquo;what should I do today?&rdquo;
               </h2>
               <p className="mt-2 text-sm leading-6 text-muted">
                 Visit the Plan page to import your workbook. Once your plan is in, race date and phase blocks are available, the coach can start adapting it.

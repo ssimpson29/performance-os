@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import Link from 'next/link';
+
 import { PageHero } from '@/components/layout/page-hero';
 import { Card } from '@/components/ui/card';
 import { adaptWeeklyStructure } from '@/lib/training-plan/adaptive-coach';
@@ -54,6 +56,21 @@ export default async function PlanPage() {
         description="The coach uses weekly structure as the base, then adapts Monday and Tuesday based on what actually happened over the weekend and how recovered the athlete is."
         badge="Excel import + adaptive coaching"
       />
+      <section className="shell pb-4">
+        <Card className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="eyebrow">Have your own training plan?</p>
+            <h2 className="mt-1 text-lg font-semibold text-white">Upload an Excel workbook to use the coach with your plan.</h2>
+            <p className="mt-1 text-sm text-muted">Parses weekly structure, phase blocks, and support templates. Sign-in required.</p>
+          </div>
+          <Link
+            href="/plan/import"
+            className="inline-flex items-center self-start rounded-full bg-brand2 px-5 py-2 text-sm font-medium text-black md:self-auto"
+          >
+            Import your plan
+          </Link>
+        </Card>
+      </section>
       <section className="shell grid gap-6 pb-8 lg:grid-cols-3">
         <Card className="space-y-4 lg:col-span-3">
           <div className="flex items-start justify-between gap-4">

@@ -103,6 +103,7 @@ npm run test --workspace @performance-os/web   # vitest run
   - `POST /api/coach/message`
   - `POST /api/longevity/evaluate`
   - `POST /api/imports/biomarker-panel`
+  - `POST /api/imports/biomarker-panel-image`
 - **Intentional exception:** `POST /api/imports/apple-health/push`
   uses signed URL + HMAC signature for iPhone Shortcut automation. Do
   NOT convert to cookie auth. The signed URL itself is the credential.
@@ -122,6 +123,19 @@ npm run test --workspace @performance-os/web   # vitest run
 3. **Interactive guru service** — `apps/web/lib/agents/longevity-guru.ts` + `apps/web/lib/longevity/persistence.ts` (cross-write)
 
 LLM is optional. Always preserve deterministic fallback for tests, local dev, and provider outages.
+
+### Image-based ingestion (vision LLM)
+- `POST /api/imports/biomarker-panel-image` accepts a JPG/PNG/WebP/PDF
+  and calls a vision-capable model (`AI_COACH_MODEL` must be vision-capable —
+  `gpt-4o`-class). Returns extracted markers in a **review** payload —
+  does not save to `biomarker_results` directly. UI at `/longevity/import`
+  surfaces the review table; the user corrects, then Save commits via the
+  existing `POST /api/imports/biomarker-panel` JSON route. Unmatched
+  marker names and unit mismatches are flagged but skipped on save.
+- For training plans: the existing `POST /api/imports/training-plan`
+  takes the Excel workbook directly (no vision needed — the parser is
+  deterministic). UI at `/plan/import`.
+- Both upload UIs require sign-in.
 
 **Two coaches, one engine.** Performance OS runs two LLM-driven agents
 over this 3-layer engine: the **Training Coach** (adaptive, daily, races

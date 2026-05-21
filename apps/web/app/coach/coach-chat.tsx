@@ -126,7 +126,7 @@ export function CoachChat(props: CoachChatProps) {
 
       <Card className="space-y-4">
         <div>
-          <p className="eyebrow">Today's call</p>
+          <p className="eyebrow">Today&apos;s call</p>
           <h2 className="mt-2 text-2xl font-semibold text-white">
             {latestMessage ?? 'No coach run yet today. Send a message below to get started.'}
           </h2>
@@ -157,9 +157,9 @@ export function CoachChat(props: CoachChatProps) {
       <Card className="space-y-4">
         <div>
           <p className="eyebrow">Conversation</p>
-          <h2 className="mt-2 text-xl font-semibold text-white">Tell the coach what's going on.</h2>
+          <h2 className="mt-2 text-xl font-semibold text-white">Tell the coach what&apos;s going on.</h2>
           <p className="mt-2 text-sm leading-6 text-muted">
-            Mention strain or pain and the coach will set an easy-through window automatically. Say "pain free" or "back to normal" on a follow-up to close it.
+            Mention strain or pain and the coach will set an easy-through window automatically. Say &ldquo;pain free&rdquo; or &ldquo;back to normal&rdquo; on a follow-up to close it.
           </p>
         </div>
 
@@ -196,7 +196,7 @@ export function CoachChat(props: CoachChatProps) {
             onChange={(e) => setDraft(e.target.value)}
             disabled={sending}
             rows={3}
-            placeholder="E.g., 'foot hurts after the long run' or 'how should I run today?'"
+            placeholder="E.g., foot hurts after the long run, or how should I run today"
             className="w-full rounded-2xl border border-white/10 bg-white/[0.04] p-3 text-sm text-white outline-none placeholder:text-muted focus:border-brand2/60"
           />
           <div className="flex items-center justify-between gap-3">

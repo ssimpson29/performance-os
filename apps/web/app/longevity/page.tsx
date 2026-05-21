@@ -47,12 +47,15 @@ export default async function LongevityPage() {
                 The Guru needs a lab panel to evaluate.
               </h2>
               <p className="mt-2 text-sm leading-6 text-muted">
-                Import a panel via <code className="text-brand2">POST /api/imports/biomarker-panel</code>
-                {' '}with a JSON body of <code>{'{ panelDate, markers: [{ markerKey, value, unit }, …] }'}</code>. Supported marker keys live in
-                {' '}<code className="text-brand2">apps/web/lib/longevity/reference-ranges.ts</code>.
-                {' '}A no-code UI for panel uploads is a follow-up.
+                Upload an image of your lab report — the vision model extracts every biomarker, then you review and save. Or use the JSON API at <code className="text-brand2">POST /api/imports/biomarker-panel</code>.
               </p>
             </div>
+            <Link
+              href="/longevity/import"
+              className="inline-flex items-center justify-center self-start rounded-full bg-brand2 px-5 py-2 text-sm font-medium text-black"
+            >
+              Upload a lab report image
+            </Link>
           </Card>
         ) : null}
 
@@ -67,7 +70,15 @@ export default async function LongevityPage() {
               <p className="text-sm leading-6 text-muted">
                 {state.latestPanel ? `Drawn ${state.latestPanel.panelDate}` : 'No panel on record'}
               </p>
-              <ReevaluateButton />
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <ReevaluateButton />
+                <Link
+                  href="/longevity/import"
+                  className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-xs font-medium text-white"
+                >
+                  Upload another panel
+                </Link>
+              </div>
             </Card>
 
             {state.longevityContext ? (
