@@ -484,3 +484,110 @@ describe('adaptWeeklyStructure — longevityContext cross-influence', () => {
     expect(adapted.planAdaptation?.suggestion).toBe('raise');
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// parseMileageMidpoint helper + auto-populated prescribedWeek
+// ---------------------------------------------------------------------------
+
+import { parseMileageMidpoint } from '../lib/training-plan/adaptive-coach';
+
+describe('parseMileageMidpoint', () => {
+  it('parses a single integer', () => {
+    expect(parseMileageMidpoint('65')).toBe(65);
+  });
+  it('parses an ASCII range as midpoint', () => {
+    expect(parseMileageMidpoint('62-65')).toBe(63.5);
+  });
+  it('parses an en-dash range as midpoint', () => {
+    expect(parseMileageMidpoint('70–72')).toBe(71);
+  });
+  it('strips parenthetical context like (75%)', () => {
+    expect(parseMileageMidpoint('60 (75%)')).toBe(60);
+  });
+  it('returns null for non-numeric content', () => {
+    expect(parseMileageMidpoint('Simulated vert (treadmill focus)')).toBeNull();
+  });
+  it('returns null for empty / undefined', () => {
+    expect(parseMileageMidpoint('')).toBeNull();
+    expect(parseMileageMidpoint(undefined)).toBeNull();
+  });
+});
+
+describe('adaptWeeklyStructure — auto-populates prescribedWeek from phaseBlocks', () => {
+  it('derives performance delta from the current weeks mileageTarget when prescribedWeek is absent', () => {
+    const phaseBlocks = buildPhaseBlocks();
+    // Today is 2026-02-09 (week 1 of the plan). Set every foundation week so
+    // the engine reads '65' regardless of which week today lands on.
+    for (const week of phaseBlocks[0].weeks) {
+      week.mileageTarget = '65';
+    }
+
+    // Athlete completed roughly half the weekly minutes (65 mi * 9 min/mi = 585 min;
+    // completed 280 min ≈ -52%): expect 'under' signal.
+    const adapted = adaptWeeklyStructure({
+      weeklyStructure,
+      completedWorkouts: [
+        { day: 'Saturday', durationMinutes: 180, intensityScore: 6, loadScore: 180, sessionType: 'Long' },
+        { day: 'Sunday', durationMinutes: 100, intensityScore: 4, loadScore: 100, sessionType: 'Easy' },
+      ],
+      currentDay: 'Monday',
+      recoveryScore: 78,
+      today: '2026-02-09',
+      planStartDate: '2026-02-02',
+      raceDate: '2026-08-07',
+      phaseBlocks,
+      recoveryHistory: steadyHealthyRecovery(),
+    });
+
+    expect(adapted.performanceDelta).toBeDefined();
+    expect(adapted.performanceDelta?.signal).toBe('under');
+    expect(adapted.planAdaptation?.suggestion).toBe('lower');
+  });
+
+  it('caller-supplied prescribedWeek wins over auto-derivation', () => {
+    const phaseBlocks = buildPhaseBlocks();
+    for (const week of phaseBlocks[0].weeks) {
+      week.mileageTarget = '65'; // would imply ~585 min auto-derived
+    }
+
+    const adapted = adaptWeeklyStructure({
+      weeklyStructure,
+      completedWorkouts: [
+        { day: 'Saturday', durationMinutes: 300, intensityScore: 6, loadScore: 300, sessionType: 'Long' },
+      ],
+      currentDay: 'Monday',
+      recoveryScore: 80,
+      today: '2026-02-09',
+      planStartDate: '2026-02-02',
+      raceDate: '2026-08-07',
+      phaseBlocks,
+      prescribedWeek: { volumeTarget: 120 }, // far below auto-derived; completed 300 → over
+      recoveryHistory: steadyHealthyRecovery(),
+    });
+
+    expect(adapted.performanceDelta?.signal).toBe('over');
+  });
+
+  it('leaves performanceDelta undefined when mileageTarget is non-numeric', () => {
+    const phaseBlocks = buildPhaseBlocks();
+    // Today is 2026-02-09 (week 1 of the plan). Wipe every foundation-phase
+    // week to a non-numeric value so the engine can't parse any mileageTarget.
+    for (const week of phaseBlocks[0].weeks) {
+      week.mileageTarget = 'Simulated vert (treadmill focus)';
+    }
+
+    const adapted = adaptWeeklyStructure({
+      weeklyStructure,
+      completedWorkouts: manageableWeekend,
+      currentDay: 'Monday',
+      recoveryScore: 80,
+      today: '2026-02-09',
+      planStartDate: '2026-02-02',
+      raceDate: '2026-08-07',
+      phaseBlocks,
+    });
+
+    expect(adapted.performanceDelta).toBeUndefined();
+  });
+});

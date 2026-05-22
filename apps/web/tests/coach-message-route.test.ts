@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const getAuthenticatedUserId = vi.fn();
 const createServerSupabaseClient = vi.fn();
 const loadAdaptiveCoachContext = vi.fn();
+const loadActiveTrainingPlan = vi.fn();
 const adaptWeeklyStructure = vi.fn();
 const loadTrainingCoachState = vi.fn();
 const runTrainingCoach = vi.fn();
@@ -10,7 +11,7 @@ const persistTrainingCoachRun = vi.fn();
 
 vi.mock('@/lib/server-auth', () => ({ getAuthenticatedUserId }));
 vi.mock('@/lib/supabase-server', () => ({ createServerSupabaseClient }));
-vi.mock('@/app/plan/coach-data', () => ({ loadAdaptiveCoachContext }));
+vi.mock('@/app/plan/coach-data', () => ({ loadAdaptiveCoachContext, loadActiveTrainingPlan }));
 vi.mock('@/lib/training-plan/adaptive-coach', () => ({ adaptWeeklyStructure }));
 vi.mock('@/lib/agents/training-coach-persistence', () => ({
   loadTrainingCoachState,
@@ -51,10 +52,21 @@ function makeRequest(body: unknown) {
 }
 
 describe('POST /api/coach/message', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetAllMocks();
+    const { resetRateLimitStore } = await import('../lib/rate-limit');
+    resetRateLimitStore();
     createServerSupabaseClient.mockReturnValue({ marker: 'supabase' });
     loadAdaptiveCoachContext.mockResolvedValue(SAMPLE_COACH_INPUT);
+    loadActiveTrainingPlan.mockResolvedValue({
+      planId: 'plan-1',
+      planStartDate: '2026-02-02',
+      raceDate: '2026-08-07',
+      goal: 'Place top 10',
+      weeklyStructure: [],
+      phaseBlocks: [],
+      supportTemplates: [],
+    });
     adaptWeeklyStructure.mockReturnValue(SAMPLE_ADAPTIVE);
     loadTrainingCoachState.mockResolvedValue({ conversation: [], followUp: null });
     runTrainingCoach.mockResolvedValue(SAMPLE_OUTPUT);
@@ -143,6 +155,15 @@ describe('POST /api/coach/message — rate limit', () => {
     resetRateLimitStore();
     createServerSupabaseClient.mockReturnValue({ marker: 'supabase' });
     loadAdaptiveCoachContext.mockResolvedValue(SAMPLE_COACH_INPUT);
+    loadActiveTrainingPlan.mockResolvedValue({
+      planId: 'plan-1',
+      planStartDate: '2026-02-02',
+      raceDate: '2026-08-07',
+      goal: 'Place top 10',
+      weeklyStructure: [],
+      phaseBlocks: [],
+      supportTemplates: [],
+    });
     adaptWeeklyStructure.mockReturnValue(SAMPLE_ADAPTIVE);
     loadTrainingCoachState.mockResolvedValue({ conversation: [], followUp: null });
     runTrainingCoach.mockResolvedValue(SAMPLE_OUTPUT);

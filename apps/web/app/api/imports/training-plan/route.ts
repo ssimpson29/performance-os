@@ -71,6 +71,7 @@ export async function POST(request: Request) {
         goal: raceContext?.goal ?? null,
         weeklyStructure: parsed.weeklyStructure,
         phaseBlocks: parsed.phaseBlocks,
+        supportTemplates: parsed.supportTemplates,
         raceContext,
       },
     });

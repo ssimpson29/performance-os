@@ -249,6 +249,7 @@ describe('loadAdaptiveCoachContext', () => {
       goal: 'Goal text',
       weeklyStructure: [],
       phaseBlocks: [],
+      supportTemplates: [],
     };
 
     const ctx = await loadAdaptiveCoachContext(supabase, 'user-1', {

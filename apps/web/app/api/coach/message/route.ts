@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { loadAdaptiveCoachContext } from '@/app/plan/coach-data';
+import { loadActiveTrainingPlan, loadAdaptiveCoachContext } from '@/app/plan/coach-data';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { runTrainingCoach } from '@/lib/agents/training-coach';
 import { loadTrainingCoachState, persistTrainingCoachRun } from '@/lib/agents/training-coach-persistence';
@@ -39,12 +39,19 @@ export async function POST(request: Request) {
   const adaptive = adaptWeeklyStructure(coachInput);
   const state = await loadTrainingCoachState(supabase, { userId, today });
 
+  // Load supportTemplates separately so the LLM can reference 'Lift A',
+  // 'Speed Warmup' etc. by their actual exercises rather than waving at the
+  // workbook. (Cheap second query for a single-user app; can be folded into
+  // loadAdaptiveCoachContext later if it shows up in latency.)
+  const activePlan = await loadActiveTrainingPlan(supabase, userId);
+
   const output = await runTrainingCoach({
     today,
     athleteMessage,
     adaptive,
     conversation: state.conversation,
     followUp: state.followUp,
+    supportTemplates: activePlan?.supportTemplates,
   });
 
   const persisted = await persistTrainingCoachRun(supabase, { userId, today, output });

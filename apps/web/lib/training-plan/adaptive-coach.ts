@@ -264,6 +264,64 @@ function buildRecommendation(session: WeeklyStructureSession, fatigueState: Fati
   };
 }
 
+
+// ---------------------------------------------------------------------------
+// Phase-week prescribed-volume autopopulation
+// ---------------------------------------------------------------------------
+
+/**
+ * Easy-aerobic pace assumption used to convert miles → estimated minutes when
+ * we need to compare prescribed mileage against a completed-workouts volume
+ * sum (which is in minutes). 9 min/mi reflects a typical easy run pace for a
+ * trained ultra athlete on rolling terrain. Caller can override by passing
+ * `prescribedWeek` directly with explicit minute / mile units.
+ */
+const DEFAULT_EASY_PACE_MIN_PER_MILE = 9;
+
+/**
+ * Parse a phaseBlocks mileageTarget cell (e.g. "62-65", "70–72", "65",
+ * "60 (75%)") and return a midpoint number, or null if no numeric content.
+ * Handles ASCII hyphen and en/em-dash, plus parenthetical asides.
+ */
+export function parseMileageMidpoint(raw: string | undefined): number | null {
+  if (!raw) return null;
+  // Strip parenthetical content like "(75%)" or "(Deload)".
+  const cleaned = raw.replace(/\([^)]*\)/g, ' ').trim();
+  // Find numeric tokens separated by - – —. Take first numeric block.
+  const match = cleaned.match(/(\d+(?:\.\d+)?)\s*[-–—]\s*(\d+(?:\.\d+)?)/);
+  if (match) {
+    const lo = Number(match[1]);
+    const hi = Number(match[2]);
+    if (Number.isFinite(lo) && Number.isFinite(hi)) return (lo + hi) / 2;
+  }
+  const single = cleaned.match(/(\d+(?:\.\d+)?)/);
+  if (single) {
+    const n = Number(single[1]);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+/**
+ * Given phaseBlocks + a resolved PhasePosition, return the current week's
+ * prescribed-volume target in MINUTES (converted from miles using the easy-pace
+ * constant). Returns null when the position points outside the blocks or the
+ * mileageTarget cell isn't numerically parseable.
+ */
+function prescribedMinutesFromCurrentWeek(
+  phaseBlocks: PhaseBlock[] | undefined,
+  position: PhasePosition | undefined,
+): number | null {
+  if (!phaseBlocks || !position || position.phaseIndex < 0) return null;
+  const phase = phaseBlocks[position.phaseIndex];
+  if (!phase) return null;
+  const week = phase.weeks[position.weekIndexInPhase];
+  if (!week) return null;
+  const miles = parseMileageMidpoint(week.mileageTarget);
+  if (miles == null) return null;
+  return miles * DEFAULT_EASY_PACE_MIN_PER_MILE;
+}
+
 // ---------------------------------------------------------------------------
 // Plan-level adapt-up / adapt-down
 // ---------------------------------------------------------------------------
@@ -447,12 +505,24 @@ export function adaptWeeklyStructure(input: AdaptiveCoachInput): AdaptiveCoachRe
     ? computeRecoveryTrend(input.recoveryHistory)
     : undefined;
 
-  const performanceDelta = input.prescribedWeek
-    ? computePerformanceDelta({
-        prescribed: input.prescribedWeek,
+  // Use the caller-supplied prescribedWeek when present; otherwise auto-derive
+  // it from phaseBlocks[currentPhase].weeks[currentWeek].mileageTarget so the
+  // engine acts on the athlete's actual plan numbers, not just synthetic input.
+  let performanceDelta: PerformanceDelta | undefined;
+  if (input.prescribedWeek) {
+    performanceDelta = computePerformanceDelta({
+      prescribed: input.prescribedWeek,
+      completed: input.completedWorkouts,
+    });
+  } else {
+    const autoMinutes = prescribedMinutesFromCurrentWeek(input.phaseBlocks, phasePosition);
+    if (autoMinutes != null) {
+      performanceDelta = computePerformanceDelta({
+        prescribed: { volumeTarget: autoMinutes },
         completed: input.completedWorkouts,
-      })
-    : undefined;
+      });
+    }
+  }
 
   const baseRecommendations = input.weeklyStructure
     .filter((session) => ['Monday', 'Tuesday'].includes(session.day))

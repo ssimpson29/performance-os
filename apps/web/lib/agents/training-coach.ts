@@ -1,4 +1,4 @@
-import type { AdaptiveCoachResult, AdaptedRecommendation } from '@/lib/training-plan/types';
+import type { AdaptiveCoachResult, AdaptedRecommendation, SupportTemplate } from '@/lib/training-plan/types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -45,6 +45,13 @@ export type TrainingCoachInput = {
   conversation: CoachConversationMessage[];
   /** Existing follow-up window state (null when no open window). */
   followUp: CoachFollowUp | null;
+  /**
+   * Support routines parsed from the training plan workbook (Strength Day A/B/C,
+   * Daily Routine, Speed Warmup, Mobility, etc.). When the LLM composes a daily
+   * call that references "Lift A" or "Speed Warmup", it can name specific
+   * exercises rather than waving at "see your strength sheet".
+   */
+  supportTemplates?: SupportTemplate[];
 };
 
 export type TrainingCoachOutput = {
@@ -282,6 +289,19 @@ function buildUserPrompt(input: TrainingCoachInput, injury: InjurySignal, recove
   lines.push(`Recovery signal: ${recovery.detected ? 'YES' : 'no'}`);
   lines.push(`Open follow-up window: ${input.followUp?.status === 'active' ? `yes (easy through ${input.followUp.easyThroughDate}, check in ${input.followUp.checkInDate})` : 'no'}`);
   lines.push('');
+  if (input.supportTemplates && input.supportTemplates.length) {
+    lines.push('=== Support routines available (from the plan workbook) ===');
+    for (const tmpl of input.supportTemplates) {
+      lines.push(`* ${tmpl.name} (${tmpl.sourceSheet}):`);
+      for (const item of tmpl.items.slice(0, 12)) {
+        const prescription = item.prescription ? ` — ${item.prescription}` : '';
+        const focus = item.focus ? ` (${item.focus})` : '';
+        const notes = item.notes ? ` · ${item.notes}` : '';
+        lines.push(`    - ${item.label}${prescription}${focus}${notes}`);
+      }
+    }
+  }
+
   if (input.conversation.length) {
     lines.push('=== Recent conversation ===');
     for (const m of input.conversation.slice(-6)) {
@@ -289,7 +309,7 @@ function buildUserPrompt(input: TrainingCoachInput, injury: InjurySignal, recove
     }
   }
   lines.push('');
-  lines.push('Reply as the coach. One paragraph. No markdown.');
+  lines.push('Reply as the coach. One paragraph. No markdown. When you reference a strength routine by name (e.g. "Lift A"), use the exact exercises from the support routines section above.');
   return lines.join('\n');
 }
 

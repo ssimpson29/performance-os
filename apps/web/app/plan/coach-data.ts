@@ -6,6 +6,7 @@ import type {
   PhaseBlock,
   RaceContext,
   RecoverySample,
+  SupportTemplate,
   WeeklyStructureSession,
 } from '@/lib/training-plan/types';
 
@@ -119,6 +120,7 @@ export type ActiveTrainingPlanContext = {
   goal: string | null;
   weeklyStructure: WeeklyStructureSession[];
   phaseBlocks: PhaseBlock[];
+  supportTemplates: SupportTemplate[];
   raceContext?: RaceContext;
 };
 
@@ -162,6 +164,7 @@ export async function loadActiveTrainingPlan(
     goal: row.goal,
     weeklyStructure: (metadata.weeklyStructure as WeeklyStructureSession[] | undefined) ?? [],
     phaseBlocks: (metadata.phaseBlocks as PhaseBlock[] | undefined) ?? [],
+    supportTemplates: (metadata.supportTemplates as SupportTemplate[] | undefined) ?? [],
     raceContext: metadata.raceContext as RaceContext | undefined,
   };
 }
