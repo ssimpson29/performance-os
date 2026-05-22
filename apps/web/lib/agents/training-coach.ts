@@ -347,8 +347,9 @@ function buildUserPrompt(input: TrainingCoachInput, injury: InjurySignal, recove
 async function callLlm(env: LlmEnv, systemPrompt: string, userPrompt: string): Promise<string | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20_000);
+  const endpoint = `${env.baseUrl}/v1/chat/completions`;
   try {
-    const response = await fetch(`${env.baseUrl}/v1/chat/completions`, {
+    const response = await fetch(endpoint, {
       method: 'POST',
       signal: controller.signal,
       headers: {
@@ -365,10 +366,31 @@ async function callLlm(env: LlmEnv, systemPrompt: string, userPrompt: string): P
         max_tokens: 400,
       }),
     });
-    if (!response.ok) return null;
-    const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-    return data.choices?.[0]?.message?.content?.trim() ?? null;
-  } catch {
+    if (!response.ok) {
+      const bodyText = await response.text().catch(() => '');
+      console.error(
+        `[training-coach] LLM call returned ${response.status} from ${endpoint} (model=${env.model}). ` +
+          `Body (first 500 chars): ${bodyText.slice(0, 500)}`,
+      );
+      return null;
+    }
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const content = data.choices?.[0]?.message?.content?.trim() ?? null;
+    if (!content) {
+      console.error(
+        `[training-coach] LLM returned 200 but no choices[0].message.content. ` +
+          `Raw response (first 500 chars): ${JSON.stringify(data).slice(0, 500)}`,
+      );
+    }
+    return content;
+  } catch (err) {
+    const name = err instanceof Error ? err.name : 'unknown';
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(
+      `[training-coach] LLM fetch threw ${name} against ${endpoint} (model=${env.model}): ${message}`,
+    );
     return null;
   } finally {
     clearTimeout(timeout);
@@ -402,6 +424,10 @@ export async function runTrainingCoach(input: TrainingCoachInput): Promise<Train
   if (env) {
     llmInvoked = true;
     message = await callLlm(env, buildSystemPrompt(), buildUserPrompt(input, injurySignal, recoverySignal));
+  } else {
+    console.warn(
+      '[training-coach] AI_COACH_API_KEY / AI_COACH_MODEL / AI_COACH_BASE_URL not all set; using deterministic fallback.',
+    );
   }
   if (!message) {
     message = deterministicMessage(input.adaptive, injurySignal);
