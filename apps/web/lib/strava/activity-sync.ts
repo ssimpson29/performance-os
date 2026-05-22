@@ -687,13 +687,21 @@ export async function syncStravaActivities(
     .update({ last_synced_at: new Date(now).toISOString(), status: 'active' })
     .eq('id', row.id);
 
-  // Run the planned-session matcher over the same window we just synced.
-  // This is what reconciles freshly-pulled Strava activities with planned
-  // sessions so the "Plan vs actual" view shows them as completed instead
-  // of off-plan. Idempotent and non-fatal: failure is logged but doesn't
-  // surface to the user — they still see the sync summary.
+  // Run the planned-session matcher over at least the last 30 days,
+  // regardless of how recent last_synced_at is. This is what reconciles
+  // existing Strava activities with planned sessions after a classifier
+  // change or a stale `plan_workout_matches` row. The activity fetch above
+  // is still cursor-based (only NEW activities pulled from Strava), but
+  // the matcher has to look at everything the user has on file so a
+  // re-click of "Sync now" actually re-evaluates existing rows. Idempotent
+  // and non-fatal: failure is logged but doesn't surface to the user.
   try {
-    const fromDateOnly = new Date(afterUnix * 1000).toISOString().slice(0, 10);
+    // Never let the matcher window be narrower than 30 days. When the
+    // user re-clicks Sync now, last_synced_at is recent, so afterUnix
+    // alone would only reconcile today — leaving yesterday's misclassified
+    // session permanently stuck.
+    const matcherFromUnix = Math.min(afterUnix, fallbackAfter);
+    const fromDateOnly = new Date(matcherFromUnix * 1000).toISOString().slice(0, 10);
     const toDateOnly = new Date(now).toISOString().slice(0, 10);
     await applyPlanMatchingForUserDateRange(supabase, {
       userId,
