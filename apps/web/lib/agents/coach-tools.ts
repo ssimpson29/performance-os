@@ -64,7 +64,7 @@ const getRecentWorkoutsDefinition: ToolDefinition = {
   function: {
     name: 'getRecentWorkouts',
     description:
-      "Get the athlete's recent completed workouts. Each entry includes the ISO date (e.g. '2026-05-21'), day-of-week, session type, duration, distance, average heart rate, source (apple_watch / strava / manual), and any athlete-authored description from Strava (e.g. '+8kg vest', 'felt strong on the climb'). USE THE DATE FIELDS — when the athlete says 'yesterday' or 'Thursday', match against `localDate`. Don't claim a workout doesn't exist without checking the dates here. Returns up to the last 14 days by default.",
+      "Get the athlete's recent completed workouts. Each entry includes ISO date (e.g. '2026-05-21'), day-of-week, session type, duration, distance, average heart rate, elevation gain in meters, source (apple_watch / strava / manual), and any athlete-authored description from Strava (e.g. '+8kg vest'). USE THE DATE FIELDS — when the athlete says 'yesterday' or 'Thursday', match against `localDate`. Use `elevationGainM` for vert questions — it's populated for every Strava activity. When a field is null it really wasn't recorded; when it's a number, quote it. Don't claim a workout doesn't exist or a field is missing without checking the data here. Returns up to the last 14 days by default.",
     parameters: {
       type: 'object',
       properties: {
@@ -96,6 +96,7 @@ const handleGetRecentWorkouts: ToolHandler = async (args, { ctx }) => {
       durationMinutes: w.durationMinutes,
       distanceMeters: w.distanceMeters,
       avgHeartRate: w.avgHeartRate,
+      elevationGainM: w.elevationGainM,
       intensityScore: w.intensityScore,
       loadScore: w.loadScore,
       description: w.description,

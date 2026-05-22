@@ -103,6 +103,13 @@ export type CompletedWorkout = {
   distanceMeters?: number | null;
   /** Average heart rate, if recorded. */
   avgHeartRate?: number | null;
+  /**
+   * Total elevation gain in meters for the workout. Strava reports this on
+   * every activity (`total_elevation_gain`); we stash it in
+   * workouts.metadata.strava.elevationGainM and project it back out for the
+   * coach. Null when the source didn't record it (e.g. treadmill, indoor).
+   */
+  elevationGainM?: number | null;
 };
 
 export type AdaptationAction = 'keep' | 'downgrade' | 'defer-intensity' | 'raise';

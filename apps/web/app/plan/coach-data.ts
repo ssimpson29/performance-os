@@ -37,7 +37,27 @@ type WorkoutRow = {
   description: string | null;
   distance_meters: number | null;
   avg_heart_rate: number | null;
+  metadata: Record<string, unknown> | null;
 };
+
+/**
+ * Extract elevation gain from a workouts row's metadata. Strava sync stashes
+ * it under `metadata.strava.elevationGainM` (see lib/strava/activity-sync.ts).
+ * Returns null for sources that don't carry vert (e.g. treadmill, indoor).
+ */
+function extractElevationGainM(metadata: Record<string, unknown> | null): number | null {
+  if (!metadata || typeof metadata !== 'object') return null;
+  const strava = (metadata as { strava?: Record<string, unknown> }).strava;
+  if (strava && typeof strava === 'object') {
+    const v = (strava as { elevationGainM?: unknown }).elevationGainM;
+    if (typeof v === 'number') return v;
+  }
+  // Future-proofing: Apple Watch push could land elevation under a different
+  // key. Fall through to null so we don't fabricate a number.
+  const direct = (metadata as { elevationGainM?: unknown }).elevationGainM;
+  if (typeof direct === 'number') return direct;
+  return null;
+}
 
 /**
  * Load completed workouts for the authenticated athlete in the recent
@@ -64,7 +84,7 @@ export async function loadCompletedWorkouts(
   const { data, error } = await supabase
     .from('workouts')
     .select(
-      'local_date, workout_type, duration_seconds, perceived_exertion, source, description, distance_meters, avg_heart_rate',
+      'local_date, workout_type, duration_seconds, perceived_exertion, source, description, distance_meters, avg_heart_rate, metadata',
     )
     .eq('user_id', userId)
     .is('superseded_by', null)
@@ -90,6 +110,7 @@ export async function loadCompletedWorkouts(
       description: row.description,
       distanceMeters: row.distance_meters,
       avgHeartRate: row.avg_heart_rate,
+      elevationGainM: extractElevationGainM(row.metadata),
     };
   });
 }
