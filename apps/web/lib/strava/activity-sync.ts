@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { applyPlanMatchingForUserDateRange } from '@/lib/training-plan/plan-matching-runner';
 import { findExistingMatch, type WorkoutLike } from '@/lib/workouts/duplicate-matching';
 
 /**
@@ -324,6 +325,10 @@ export async function ensureFreshStravaToken(
  * Strava's API, queries the athlete's workouts in the ±5-minute window for
  * dedup, and delegates to processStravaActivity. Returns the same enum the
  * batch sync uses, so handlers can summarize what happened.
+ *
+ * After the activity is inserted (or linked), runs the planned-session
+ * matcher over a ±2 day window so the new workout shows up against the
+ * planned plan immediately rather than only after the next Apple import.
  */
 export async function handleStravaActivityEvent(
   supabase: SupabaseClient,
@@ -360,7 +365,34 @@ export async function handleStravaActivityEvent(
   }
   const existing = (existingRows as WorkoutRow[] | null) ?? [];
 
-  return processStravaActivity(supabase, { userId, activity, existing });
+  const result = await processStravaActivity(supabase, { userId, activity, existing });
+
+  // Re-run the planned-session matcher over the day-of-activity ±2 days
+  // window. Non-fatal: if this fails we still acknowledge the webhook so
+  // Strava doesn't retry — the next sync will pick up the missing matches.
+  if (result !== 'failed' && result !== 'alreadyPresent') {
+    const localDate = activity.start_date_local
+      ? activity.start_date_local.slice(0, 10)
+      : new Date(startedAtMs).toISOString().slice(0, 10);
+    try {
+      await applyPlanMatchingForUserDateRange(supabase, {
+        userId,
+        fromDate: isoDateOffset(localDate, -2),
+        toDate: isoDateOffset(localDate, 2),
+      });
+    } catch (err) {
+      console.error('handleStravaActivityEvent: plan matching skipped:', err);
+    }
+  }
+
+  return result;
+}
+
+function isoDateOffset(iso: string, deltaDays: number): string {
+  const parts = iso.slice(0, 10).split('-').map((p) => Number.parseInt(p, 10));
+  const d = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+  d.setUTCDate(d.getUTCDate() + deltaDays);
+  return d.toISOString().slice(0, 10);
 }
 
 /**
@@ -456,6 +488,23 @@ export async function syncStravaActivities(
     .from('user_integrations')
     .update({ last_synced_at: new Date(now).toISOString(), status: 'active' })
     .eq('id', row.id);
+
+  // Run the planned-session matcher over the same window we just synced.
+  // This is what reconciles freshly-pulled Strava activities with planned
+  // sessions so the "Plan vs actual" view shows them as completed instead
+  // of off-plan. Idempotent and non-fatal: failure is logged but doesn't
+  // surface to the user — they still see the sync summary.
+  try {
+    const fromDateOnly = new Date(afterUnix * 1000).toISOString().slice(0, 10);
+    const toDateOnly = new Date(now).toISOString().slice(0, 10);
+    await applyPlanMatchingForUserDateRange(supabase, {
+      userId,
+      fromDate: fromDateOnly,
+      toDate: toDateOnly,
+    });
+  } catch (err) {
+    console.error('syncStravaActivities: plan matching skipped:', err);
+  }
 
   return {
     ok: true,

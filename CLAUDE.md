@@ -270,6 +270,23 @@ the `workouts` table.
   ordering by running the same matcher inside
   `POST /api/imports/apple-health/push` after upsert.
 
+### Plan-vs-actual reconciliation (Strava sync path)
+Apple Health workouts go through `importActualWorkouts`, which calls
+`matchPlannedSessionsToWorkouts` inline and persists rows into
+`plan_workout_matches`. The Strava paths (`syncStravaActivities` and
+`handleStravaActivityEvent`) use `processStravaActivity`, which inserts
+into `workouts` but does NOT touch `plan_workout_matches`. To prevent
+Strava-only workouts from being stuck in the off-plan bucket,
+`apps/web/lib/training-plan/plan-matching-runner.ts` exports
+`applyPlanMatchingForUserDateRange(supabase, { userId, fromDate, toDate })`
+which re-runs the matcher and replaces the rows in
+`plan_workout_matches` for the planned_sessions in that window. Both
+Strava entry points call it after their work:
+- `syncStravaActivities` after the batch loop, over the full sync window.
+- `handleStravaActivityEvent` after the single-activity processing,
+  over ±2 days around the activity.
+Failure is logged and non-fatal — the next sync re-tries.
+
 ---
 
 ## Open Work (priority order)
