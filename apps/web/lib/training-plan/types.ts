@@ -82,11 +82,27 @@ export type ExpandedTrainingPlanCalendar = {
 };
 
 export type CompletedWorkout = {
+  /**
+   * ISO YYYY-MM-DD of the workout's local date — lets the coach reason about
+   * "yesterday" / "Thursday's run" against a real anchor. Optional so the
+   * many adaptive-coach test fixtures that only carry day-of-week stay valid;
+   * production `loadCompletedWorkouts` always sets it.
+   */
+  localDate?: string;
+  /** Day-of-week derived from localDate. */
   day: string;
   durationMinutes: number;
   intensityScore: number;
   loadScore: number;
   sessionType: string;
+  /** Source row (apple_health / apple_watch / strava / manual / training_plan). Lets the coach reference where the data came from. */
+  source?: string;
+  /** Athlete-authored description (e.g. Strava notes — "+8kg vest", "felt strong on the climb"). Null when the source didn't carry one. */
+  description?: string | null;
+  /** Distance in meters, if recorded. */
+  distanceMeters?: number | null;
+  /** Average heart rate, if recorded. */
+  avgHeartRate?: number | null;
 };
 
 export type AdaptationAction = 'keep' | 'downgrade' | 'defer-intensity' | 'raise';

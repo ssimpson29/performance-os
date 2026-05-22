@@ -9,7 +9,40 @@ import { StravaSyncError, syncStravaActivities } from '../lib/strava/activity-sy
  *     Strava description onto the canonical Apple row
  *   - second sync of the same Strava activity is idempotent (no duplicate insert)
  *   - expired token triggers a refresh before fetching activities
+ *
+ * Strava fetch mock helper: the batch sync makes TWO kinds of GET calls —
+ * the summary list (/athlete/activities) and per-activity detail
+ * (/activities/{id}). The summary returns an array; the detail returns a
+ * single object. `mockStravaFetch` routes based on URL so individual tests
+ * just provide the activity list.
  */
+
+function mockStravaFetch(activities: Array<Record<string, unknown>>) {
+  return vi.fn(async (url: unknown) => {
+    const u = String(url ?? '');
+    if (u.includes('/athlete/activities')) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => activities,
+        text: async () => JSON.stringify(activities),
+      } as Response;
+    }
+    if (u.includes('/api/v3/activities/')) {
+      // /api/v3/activities/{id} → return the matching detail.
+      const idPart = u.split('/api/v3/activities/')[1]?.split('?')[0] ?? '';
+      const match = activities.find((a) => String(a.id) === idPart);
+      const payload = match ?? activities[0] ?? null;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => payload,
+        text: async () => JSON.stringify(payload),
+      } as Response;
+    }
+    return { ok: false, status: 404, text: async () => 'not mocked' } as Response;
+  });
+}
 
 type WorkoutRow = {
   id: string;
@@ -118,25 +151,22 @@ describe('syncStravaActivities', () => {
   it('inserts new Strava activities when no Apple match exists', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => [
-          {
-            id: 555,
-            name: 'Easy lap',
-            type: 'Run',
-            sport_type: 'Run',
-            description: 'Felt smooth',
-            start_date: '2026-05-15T13:00:00.000Z',
-            start_date_local: '2026-05-15T06:00:00.000Z',
-            moving_time: 3600,
-            distance: 12000,
-            average_heartrate: 142,
-            max_heartrate: 162,
-            total_elevation_gain: 180,
-          },
-        ],
-      }),
+      mockStravaFetch([
+        {
+          id: 555,
+          name: 'Easy lap',
+          type: 'Run',
+          sport_type: 'Run',
+          description: 'Felt smooth',
+          start_date: '2026-05-15T13:00:00.000Z',
+          start_date_local: '2026-05-15T06:00:00.000Z',
+          moving_time: 3600,
+          distance: 12000,
+          average_heartrate: 142,
+          max_heartrate: 162,
+          total_elevation_gain: 180,
+        },
+      ]),
     );
 
     const inserts: Array<Record<string, unknown>> = [];
@@ -183,22 +213,19 @@ describe('syncStravaActivities', () => {
   it('links the Strava row to a matching Apple-sourced workout and forwards the description', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => [
-          {
-            id: 999,
-            name: 'Trail run',
-            type: 'Run',
-            sport_type: 'TrailRun',
-            description: 'Strong climb on the last 5k',
-            start_date: '2026-05-15T13:00:30.000Z', // 30s after the Apple row
-            start_date_local: '2026-05-15T06:00:30.000Z',
-            moving_time: 3650,
-            distance: 12500,
-          },
-        ],
-      }),
+      mockStravaFetch([
+        {
+          id: 999,
+          name: 'Trail run',
+          type: 'Run',
+          sport_type: 'TrailRun',
+          description: 'Strong climb on the last 5k',
+          start_date: '2026-05-15T13:00:30.000Z', // 30s after the Apple row
+          start_date_local: '2026-05-15T06:00:30.000Z',
+          moving_time: 3650,
+          distance: 12500,
+        },
+      ]),
     );
 
     const appleRow: WorkoutRow = {
@@ -256,19 +283,16 @@ describe('syncStravaActivities', () => {
   it('is idempotent when the same Strava activity is synced twice', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => [
-          {
-            id: 777,
-            type: 'Run',
-            sport_type: 'Run',
-            description: 'Tempo day',
-            start_date: '2026-05-15T13:00:00.000Z',
-            moving_time: 3600,
-          },
-        ],
-      }),
+      mockStravaFetch([
+        {
+          id: 777,
+          type: 'Run',
+          sport_type: 'Run',
+          description: 'Tempo day',
+          start_date: '2026-05-15T13:00:00.000Z',
+          moving_time: 3600,
+        },
+      ]),
     );
 
     const existingStrava: WorkoutRow = {

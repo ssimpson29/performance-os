@@ -54,22 +54,27 @@ describe('loadCompletedWorkouts', () => {
 
     const result = await loadCompletedWorkouts(supabase, 'user-1', { today: '2026-05-21' });
 
-    expect(result).toEqual([
-      {
-        day: 'Saturday',
-        durationMinutes: 120,
-        intensityScore: 7,
-        loadScore: 120 + 7 * 20, // 260
-        sessionType: 'Long Run',
-      },
-      {
-        day: 'Sunday',
-        durationMinutes: 30,
-        intensityScore: 3,
-        loadScore: 30 + 3 * 20, // 90
-        sessionType: 'Recovery Run',
-      },
-    ]);
+    // Use toMatchObject on each element so the test doesn't break every time
+    // CompletedWorkout grows a new optional field (e.g. description, source,
+    // distanceMeters). The core derived fields (day, durationMinutes,
+    // intensityScore, loadScore, sessionType, localDate) are what matter.
+    expect(result).toHaveLength(2);
+    expect(result[0]).toMatchObject({
+      localDate: '2026-05-16',
+      day: 'Saturday',
+      durationMinutes: 120,
+      intensityScore: 7,
+      loadScore: 120 + 7 * 20, // 260
+      sessionType: 'Long Run',
+    });
+    expect(result[1]).toMatchObject({
+      localDate: '2026-05-17',
+      day: 'Sunday',
+      durationMinutes: 30,
+      intensityScore: 3,
+      loadScore: 30 + 3 * 20, // 90
+      sessionType: 'Recovery Run',
+    });
   });
 
   it('defaults intensityScore to 5 when perceived_exertion is null', async () => {

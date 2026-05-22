@@ -112,11 +112,22 @@ export async function processStravaActivity(
   const { userId, activity, existing } = args;
   const candidate = activityToCandidate(activity);
 
-  // Already-seen Strava activity? Idempotent no-op.
+  // Already-seen Strava activity? Idempotent no-op — except: if the
+  // existing row was inserted with a NULL description (because the original
+  // sync used the summary endpoint which omits descriptions) and the new
+  // fetch carries one, backfill it. This lets a re-sync with the new
+  // detail-fetching code populate descriptions on previously-synced rows
+  // without re-inserting.
   const sameSource = existing.find(
     (w) => w.source === 'strava' && w.external_id === candidate.externalId,
   );
   if (sameSource) {
+    if (!sameSource.description && candidate.description) {
+      await supabase
+        .from('workouts')
+        .update({ description: candidate.description })
+        .eq('id', sameSource.id);
+    }
     return 'alreadyPresent';
   }
 
@@ -453,7 +464,27 @@ export async function syncStravaActivities(
       ? Math.floor(new Date(row.last_synced_at).getTime() / 1000)
       : fallbackAfter;
 
-  const activities = await fetchActivities(accessToken, afterUnix);
+  // 1. Get the summary list (cheap — single API call).
+  const summaries = await fetchActivities(accessToken, afterUnix);
+  // 2. For each summary, fetch the DetailedActivity by id so we get the
+  //    description (the summary endpoint doesn't include it). N+1 calls,
+  //    but Strava's per-15min limit (100) and per-day limit (1000) are
+  //    comfortably above the typical sync size for a single athlete. Falls
+  //    back to the summary on a per-activity failure so a single detail
+  //    fetch error doesn't block the whole sync.
+  const activities: StravaActivity[] = [];
+  for (const summary of summaries) {
+    try {
+      const detail = await fetchActivityById(accessToken, summary.id);
+      activities.push(detail ?? summary);
+    } catch (err) {
+      console.error(
+        `strava sync: detail fetch failed for activity ${summary.id}, using summary (description will be null):`,
+        err,
+      );
+      activities.push(summary);
+    }
+  }
 
   // Pull existing workouts in the window so we can match for duplicates.
   // Pad the window by 5 minutes on either side to catch boundary cases.

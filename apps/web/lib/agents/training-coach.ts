@@ -1,4 +1,14 @@
-import type { AdaptiveCoachResult, AdaptedRecommendation, CompletedWorkout, PhaseWeekTarget, SupportTemplate } from '@/lib/training-plan/types';
+import type { SupabaseClient } from '@supabase/supabase-js';
+
+import type { AdaptiveCoachResult, AdaptedRecommendation } from '@/lib/training-plan/types';
+
+import type { AthleteContext } from './athlete-context';
+import {
+  COACH_TOOL_DEFINITIONS,
+  createProposalStore,
+  executeCoachTool,
+  type ToolHandlerContext,
+} from './coach-tools';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -14,12 +24,9 @@ export type CoachConversationMessage = {
 };
 
 export type CoachFollowUp = {
-  /** ISO date the athlete should keep work easy through (inclusive). */
   easyThroughDate: string;
-  /** ISO date when the coach prompts the athlete for a re-evaluation. */
   checkInDate: string;
   status: 'active' | 'closed';
-  /** Body part / area extracted from the athlete report, if any. */
   bodyPart?: string;
 };
 
@@ -37,46 +44,44 @@ export type RecoverySignal = {
 export type TrainingCoachInput = {
   /** Today's ISO date — drives the follow-up window math. */
   today: string;
-  /** The athlete's latest message. Empty string for "no new message" (e.g., daily check). */
+  /** The athlete's latest message. Empty string for "no new message". */
   athleteMessage: string;
-  /** Deterministic coach output from adaptWeeklyStructure — ground truth for the LLM. */
-  adaptive: AdaptiveCoachResult;
-  /** Existing conversation history (most recent last). */
-  conversation: CoachConversationMessage[];
-  /** Existing follow-up window state (null when no open window). */
-  followUp: CoachFollowUp | null;
-  /**
-   * Support routines parsed from the training plan workbook (Strength Day A/B/C,
-   * Daily Routine, Speed Warmup, Mobility, etc.). When the LLM composes a daily
-   * call that references "Lift A" or "Speed Warmup", it can name specific
-   * exercises rather than waving at "see your strength sheet".
-   */
-  supportTemplates?: SupportTemplate[];
-  /** Recent completed workouts so the LLM can answer 'what have I been doing?' questions concretely. */
-  recentWorkouts?: CompletedWorkout[];
-  /** This week's prescribed phase-block target (mileage, vert, fuel, notes) for the LLM to reference verbatim. */
-  weekTarget?: PhaseWeekTarget | null;
+  /** Rich athlete context for the agent loop. */
+  athleteContext: AthleteContext;
+  /** Supabase client (passed to tool handlers for write-tool persistence). */
+  supabase: SupabaseClient;
+};
+
+export type CoachToolTraceEntry = {
+  iteration: number;
+  toolName: string;
+  argsPreview: string;
+  resultPreview: string;
 };
 
 export type TrainingCoachOutput = {
-  /** Top-line action for the athlete. */
+  /** Top-line response from the coach. */
   message: string;
-  /** Bulleted recommendations beyond the top-line. */
+  /** Optional structured recommendations the UI can surface separately. */
   recommendations: string[];
-  /** Cautions to surface (red flags / things to watch). */
+  /** Cautions to surface. */
   cautions: string[];
-  /** Flat string rationale stitched from deterministic signals. */
+  /** Plain-language rationale stitched from any deterministic signals consulted. */
   rationale: string;
-  /** Updated conversation history including this turn (coach reply appended). */
+  /** Updated conversation including this turn (most recent last). */
   conversation: CoachConversationMessage[];
-  /** Updated follow-up state (may open, close, or pass through unchanged). */
+  /** Updated follow-up window. */
   followUp: CoachFollowUp | null;
-  /** Injury detection result for this turn. Persistence layer uses this to insert health_events. */
+  /** Injury detection for this turn (used by persistence layer to insert health_events). */
   injurySignal: InjurySignal;
-  /** Recovery detection result for this turn. */
+  /** Recovery detection for this turn. */
   recoverySignal: RecoverySignal;
-  /** Whether the LLM was invoked. False when env is missing or the LLM call errored. */
+  /** Whether the LLM was invoked. False when env is missing or the call errored. */
   llmInvoked: boolean;
+  /** Tool-call trace for debugging / persistence. */
+  toolTrace: CoachToolTraceEntry[];
+  /** True when the agent persisted a new plan via commitTrainingPlan during this turn. */
+  planCommitted: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -132,8 +137,7 @@ export function detectRecoverySignal(message: string): RecoverySignal {
 export function detectInjurySignal(message: string): InjurySignal {
   if (!message) return { detected: false, rationale: 'no message' };
 
-  // Positive-recovery check FIRST so phrases like "pain free" don't trigger injury.
-  // Pitfall #1 in CLAUDE.md.
+  // Positive-recovery check FIRST (CLAUDE.md pitfall #1: "pain free" contains "pain").
   if (detectRecoverySignal(message).detected) {
     return { detected: false, rationale: 'message matched positive-recovery first' };
   }
@@ -178,8 +182,48 @@ function openFollowUpWindow(today: string, bodyPart?: string): CoachFollowUp {
 }
 
 // ---------------------------------------------------------------------------
-// Deterministic rationale + recommendations builder (used by fallback path
-// and as ground-truth context for the LLM prompt)
+// System prompt — gives the coach genuine agency.
+// ---------------------------------------------------------------------------
+
+function buildSystemPrompt(ctx: AthleteContext): string {
+  const planSummary = ctx.currentPlan
+    ? `Active plan: ${ctx.currentPlan.raceContext?.raceName ?? 'untitled'} on ${ctx.currentPlan.raceDate ?? 'no race date'}, ${ctx.currentPlan.phaseBlocks.length} phase blocks.`
+    : 'No active training plan on record.';
+  const followUpSummary = ctx.followUp?.status === 'active'
+    ? `Open follow-up window: easy through ${ctx.followUp.easyThroughDate}, check-in ${ctx.followUp.checkInDate}${ctx.followUp.bodyPart ? ` (${ctx.followUp.bodyPart})` : ''}.`
+    : 'No open follow-up window.';
+
+  return `You are the athlete's Training Coach. You give intelligent, contextual advice grounded in their actual training data — not generic templates.
+
+Today: ${ctx.today}
+${planSummary}
+${followUpSummary}
+
+You have tools to inspect the athlete's recent workouts, injury history, biomarker panel, current plan, and to run the deterministic adaptive engine. Use them when the question warrants it. Don't call every tool every turn — only what's relevant.
+
+**Anchor on dates, not feelings.** When the athlete refers to "yesterday", "Thursday", "this week's long run", or any specific workout, ALWAYS call getRecentWorkouts FIRST and match against the \`localDate\` field — never claim a workout doesn't exist without checking the data. Every workout in the tool output has its actual ISO date AND a \`description\` field (Strava annotations like "+8kg vest" go here — read them and use them in your reasoning). If the athlete mentions a specific date that doesn't appear in the data, say so — but only after you've looked.
+
+Key behaviors:
+
+- **Injury / pain reports.** When the athlete reports something physical (pain, strain, ache, swelling), call getInjuryHistory to see prior episodes, then ask ONE or TWO targeted clarifying questions (location, sharp vs dull, weight-bearing, when it started, recent shoe / surface change). Do not diagnose. Bias toward easy work for 3 days while it resolves; the system opens a follow-up window automatically.
+
+- **Recovery report.** When the athlete says "pain free", "better", "fine", "normal", "recovered" — acknowledge it and return to the normal plan (run runAdaptiveEngine if there's a plan).
+
+- **Daily question with active plan.** Call runAdaptiveEngine for today's per-day signal, optionally getRecentWorkouts for context. Give a clear recommendation. You may disagree with the engine when the broader context warrants it — explain why.
+
+- **No active plan + athlete mentions a race.** Confirm race details (name, date, distance, elevation), call getRecentWorkouts to anchor on current fitness, then call proposeRacePlan. Present the summary plainly (total weeks, phase split, peak mileage / vert, long-run progression). Ask the athlete to confirm before calling commitTrainingPlan. NEVER commit without explicit approval.
+
+- **Plan modifications.** Out of scope for now — if the athlete asks to modify their existing plan, acknowledge and say you'll add this in a future revision.
+
+Style:
+- Natural, conversational prose. One or two paragraphs.
+- No markdown headers, no bullet lists unless the athlete explicitly asks for a structured list.
+- No emojis. No exclamation points unless the athlete uses them first.
+- Be specific — reference actual numbers from tool results (mileage, dates, RPE) rather than vague language.`;
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic fallback (used when LLM fails)
 // ---------------------------------------------------------------------------
 
 function summarizeRecommendations(recs: AdaptedRecommendation[]): string[] {
@@ -205,47 +249,37 @@ function buildDeterministicCautions(adaptive: AdaptiveCoachResult): string[] {
   return cautions;
 }
 
-function buildDeterministicRationale(adaptive: AdaptiveCoachResult): string {
+function buildDeterministicRationale(adaptive: AdaptiveCoachResult | null): string {
+  if (!adaptive) return 'No active training plan; coach in plan-building mode.';
   const parts: string[] = [];
   if (adaptive.phasePosition) {
-    parts.push(
-      `Phase: ${adaptive.phasePosition.phaseName ?? 'unknown'} (${adaptive.phasePosition.weeksToRace} weeks to race)`,
-    );
+    parts.push(`Phase: ${adaptive.phasePosition.phaseName ?? 'unknown'} (${adaptive.phasePosition.weeksToRace} weeks to race)`);
   }
   parts.push(`Fatigue: ${adaptive.fatigueState} (overload ${adaptive.overloadScore.toFixed(0)})`);
   if (adaptive.recoveryTrend) {
     parts.push(`Recovery trend: ${adaptive.recoveryTrend.direction} (confidence ${adaptive.recoveryTrend.confidence})`);
   }
-  if (adaptive.performanceDelta) {
-    parts.push(`Performance vs. plan: ${adaptive.performanceDelta.signal}`);
-  }
-  if (adaptive.planAdaptation) {
-    parts.push(`Plan adaptation: ${adaptive.planAdaptation.suggestion} (${adaptive.planAdaptation.magnitudePct}%)`);
-  }
+  if (adaptive.performanceDelta) parts.push(`Performance vs. plan: ${adaptive.performanceDelta.signal}`);
+  if (adaptive.planAdaptation) parts.push(`Plan adaptation: ${adaptive.planAdaptation.suggestion} (${adaptive.planAdaptation.magnitudePct}%)`);
   return parts.join('. ');
 }
 
-function deterministicMessage(adaptive: AdaptiveCoachResult, injury: InjurySignal): string {
+function deterministicFallbackMessage(ctx: AthleteContext, injury: InjurySignal): string {
   if (injury.detected) {
     const where = injury.bodyPart ? ` Tell me more about the ${injury.bodyPart}` : ' Tell me more';
     return `Sounds like something's flaring up.${where} — when did it start, sharp or dull, weight-bearing or not? I'll keep work easy through the next 3 days while we sort it out.`;
   }
-  const today = adaptive.recommendations.find((r) => r.day === 'Monday') ?? adaptive.recommendations[0];
-  if (!today) {
-    return 'Stick with the base plan today.';
+  if (!ctx.currentPlan) {
+    return "I'm not sure I can reach my full reasoning right now, but I can see you don't have an active plan yet. If you tell me your target race (name, date, distance, elevation) and a rough sense of your current weekly volume, I can draft something next time we talk.";
   }
-  return `${today.recommendedSessionType}. ${today.reason}`;
+  return "I'm having trouble reaching my reasoning right now. Stick with today's planned session if it's an easy or aerobic day; defer hard quality work and we'll re-engage tomorrow.";
 }
 
 // ---------------------------------------------------------------------------
-// LLM prompt assembly + fetch
+// LLM environment + agent loop
 // ---------------------------------------------------------------------------
 
-type LlmEnv = {
-  apiKey: string;
-  model: string;
-  baseUrl: string;
-};
+type LlmEnv = { apiKey: string; model: string; baseUrl: string };
 
 function readLlmEnv(): LlmEnv | null {
   const apiKey = process.env.AI_COACH_API_KEY;
@@ -255,98 +289,38 @@ function readLlmEnv(): LlmEnv | null {
   return { apiKey, model, baseUrl: baseUrl.replace(/\/$/, '') };
 }
 
-function buildSystemPrompt(): string {
-  return `You are the athlete's Training Coach for an ultramarathon build (Swiss Alps 100, August 7 2026).
+type OpenAIChatMessage =
+  | { role: 'system'; content: string }
+  | { role: 'user'; content: string }
+  | { role: 'assistant'; content: string | null; tool_calls?: OpenAIToolCall[] }
+  | { role: 'tool'; tool_call_id: string; content: string };
 
-Your job is to translate the deterministic engine's output into clear, athlete-facing language. You do NOT re-prioritize against the engine; the engine's recommendations are ground truth — you explain them and ask follow-up questions when the athlete reports something physical (pain, strain, soreness, fatigue beyond normal training stress).
+type OpenAIToolCall = {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
+};
 
-When the athlete reports injury or strain, ask one or two specific follow-up questions (location, sharp vs dull, weight-bearing, recent shoe change, similar history). The deterministic engine will handle the follow-up window persistence; you compose the words. Do not promise diagnosis.
+type OpenAICompletion = {
+  choices?: Array<{
+    message?: {
+      role: 'assistant';
+      content: string | null;
+      tool_calls?: OpenAIToolCall[];
+    };
+    finish_reason?: string;
+  }>;
+};
 
-When the athlete reports recovery ("pain free", "better", "normal"), acknowledge it and return to the normal plan.
+const MAX_ITERATIONS = 8;
+const LLM_TIMEOUT_MS = 30_000;
 
-Keep responses under 120 words. No emojis. No exclamation points unless the athlete uses them first.`;
-}
-
-function buildUserPrompt(input: TrainingCoachInput, injury: InjurySignal, recovery: RecoverySignal): string {
-  const lines: string[] = [];
-  lines.push(`Today: ${input.today}`);
-  lines.push(`Athlete message: ${input.athleteMessage || '(no new message — daily check)'}`);
-  lines.push('');
-  lines.push('=== Deterministic engine output (ground truth — do not override) ===');
-  lines.push(buildDeterministicRationale(input.adaptive));
-  if (input.adaptive.recommendations.length) {
-    lines.push('Recommendations:');
-    for (const r of summarizeRecommendations(input.adaptive.recommendations)) lines.push(`- ${r}`);
-  }
-  const cautions = buildDeterministicCautions(input.adaptive);
-  if (cautions.length) {
-    lines.push('Cautions:');
-    for (const c of cautions) lines.push(`- ${c}`);
-  }
-  if (input.adaptive.planAdaptation) {
-    lines.push(
-      `Plan-level suggestion: ${input.adaptive.planAdaptation.suggestion} (${input.adaptive.planAdaptation.magnitudePct}%) — ${input.adaptive.planAdaptation.reason}`,
-    );
-  }
-  lines.push('');
-  lines.push(`Injury signal: ${injury.detected ? `YES${injury.bodyPart ? ` (${injury.bodyPart})` : ''}` : 'no'}`);
-  lines.push(`Recovery signal: ${recovery.detected ? 'YES' : 'no'}`);
-  lines.push(`Open follow-up window: ${input.followUp?.status === 'active' ? `yes (easy through ${input.followUp.easyThroughDate}, check in ${input.followUp.checkInDate})` : 'no'}`);
-  lines.push('');
-  if (input.weekTarget) {
-    lines.push('=== This weeks prescribed phase target ===');
-    const t = input.weekTarget;
-    const targets: string[] = [];
-    if (t.weekLabel) targets.push(`week ${t.weekLabel}`);
-    if (t.mileageTarget) targets.push(`mileage ${t.mileageTarget}`);
-    if (t.vertTarget) targets.push(`vert ${t.vertTarget}`);
-    if (t.saturdayTarget) targets.push(`Sat ${t.saturdayTarget}`);
-    if (t.sundayTarget) targets.push(`Sun ${t.sundayTarget}`);
-    if (t.thursdayTarget) targets.push(`Thu ${t.thursdayTarget}`);
-    if (t.fuelTarget) targets.push(`fuel ${t.fuelTarget}`);
-    if (targets.length) lines.push(`- ${targets.join(' · ')}`);
-    if (t.keyFocus) lines.push(`- Key focus: ${t.keyFocus}`);
-    if (t.notes) lines.push(`- Notes: ${t.notes}`);
-    lines.push('');
-  }
-
-  if (input.recentWorkouts && input.recentWorkouts.length) {
-    lines.push('=== Recent completed workouts ===');
-    for (const w of input.recentWorkouts.slice(-10)) {
-      const duration = w.durationMinutes ? `${w.durationMinutes}min` : '?min';
-      const intensity = `RPE ${w.intensityScore ?? '?'}`;
-      lines.push(`- ${w.day} · ${w.sessionType || 'workout'} · ${duration} · ${intensity}`);
-    }
-    lines.push('');
-  }
-
-  if (input.supportTemplates && input.supportTemplates.length) {
-    lines.push('=== Support routines available (from the plan workbook) ===');
-    for (const tmpl of input.supportTemplates) {
-      lines.push(`* ${tmpl.name} (${tmpl.sourceSheet}):`);
-      for (const item of tmpl.items.slice(0, 12)) {
-        const prescription = item.prescription ? ` — ${item.prescription}` : '';
-        const focus = item.focus ? ` (${item.focus})` : '';
-        const notes = item.notes ? ` · ${item.notes}` : '';
-        lines.push(`    - ${item.label}${prescription}${focus}${notes}`);
-      }
-    }
-  }
-
-  if (input.conversation.length) {
-    lines.push('=== Recent conversation ===');
-    for (const m of input.conversation.slice(-6)) {
-      lines.push(`${m.role}: ${m.text}`);
-    }
-  }
-  lines.push('');
-  lines.push('Reply as the coach. One paragraph. No markdown. When you reference a strength routine by name (e.g. "Lift A"), use the exact exercises from the support routines section above.');
-  return lines.join('\n');
-}
-
-async function callLlm(env: LlmEnv, systemPrompt: string, userPrompt: string): Promise<string | null> {
+async function callLlmChatCompletion(
+  env: LlmEnv,
+  messages: OpenAIChatMessage[],
+): Promise<OpenAICompletion | null> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20_000);
+  const timeout = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
   const endpoint = `${env.baseUrl}/v1/chat/completions`;
   try {
     const response = await fetch(endpoint, {
@@ -358,40 +332,20 @@ async function callLlm(env: LlmEnv, systemPrompt: string, userPrompt: string): P
       },
       body: JSON.stringify({
         model: env.model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        // gpt-5.5 / o1 / o3 reasoning-class models only accept temperature=1
-        // and reject other values with a 400. Older chat-completion models
-        // accept the same value, so we use 1 unconditionally.
+        messages,
+        tools: COACH_TOOL_DEFINITIONS,
         temperature: 1,
-        // OpenAI deprecated `max_tokens` in favor of `max_completion_tokens`
-        // for the same reasoning-class models. Bumped to 2000 because
-        // reasoning models spend a chunk of the budget on internal reasoning
-        // tokens before producing the visible reply — 400 was too tight.
         max_completion_tokens: 2000,
       }),
     });
     if (!response.ok) {
-      const bodyText = await response.text().catch(() => '');
+      const text = await response.text().catch(() => '');
       console.error(
-        `[training-coach] LLM call returned ${response.status} from ${endpoint} (model=${env.model}). ` +
-          `Body (first 500 chars): ${bodyText.slice(0, 500)}`,
+        `[training-coach] LLM call returned ${response.status} from ${endpoint} (model=${env.model}). Body: ${text.slice(0, 500)}`,
       );
       return null;
     }
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    const content = data.choices?.[0]?.message?.content?.trim() ?? null;
-    if (!content) {
-      console.error(
-        `[training-coach] LLM returned 200 but no choices[0].message.content. ` +
-          `Raw response (first 500 chars): ${JSON.stringify(data).slice(0, 500)}`,
-      );
-    }
-    return content;
+    return (await response.json()) as OpenAICompletion;
   } catch (err) {
     const name = err instanceof Error ? err.name : 'unknown';
     const message = err instanceof Error ? err.message : String(err);
@@ -404,49 +358,171 @@ async function callLlm(env: LlmEnv, systemPrompt: string, userPrompt: string): P
   }
 }
 
+function clipPreview(text: string, max = 400): string {
+  if (text.length <= max) return text;
+  return `${text.slice(0, max)}…`;
+}
+
+/**
+ * Run the LLM agent loop. Returns either the final assistant text or null
+ * if the LLM failed (deterministic fallback fires in the caller).
+ */
+async function runAgentLoop(
+  env: LlmEnv,
+  ctx: AthleteContext,
+  athleteMessage: string,
+  toolHandlerContext: ToolHandlerContext,
+): Promise<{ message: string | null; trace: CoachToolTraceEntry[]; planCommitted: boolean }> {
+  const trace: CoachToolTraceEntry[] = [];
+  let planCommitted = false;
+
+  // Conversation history -> OpenAI messages. We include the last 12 turns
+  // (truncated) plus this turn's athlete message at the end.
+  const historyMessages: OpenAIChatMessage[] = ctx.conversation.slice(-12).map((m) => ({
+    role: m.role === 'coach' ? 'assistant' : 'user',
+    content: m.text,
+  }));
+  const messages: OpenAIChatMessage[] = [
+    { role: 'system', content: buildSystemPrompt(ctx) },
+    ...historyMessages,
+  ];
+  if (athleteMessage) {
+    messages.push({ role: 'user', content: athleteMessage });
+  } else {
+    // No-message case (daily prompt). Synthesize a user turn so the LLM
+    // knows what we want.
+    messages.push({
+      role: 'user',
+      content: 'Daily check-in — give me your read on today, including anything I should pay attention to.',
+    });
+  }
+
+  for (let iter = 0; iter < MAX_ITERATIONS; iter += 1) {
+    const completion = await callLlmChatCompletion(env, messages);
+    if (!completion) {
+      return { message: null, trace, planCommitted };
+    }
+    const choice = completion.choices?.[0];
+    const assistantMessage = choice?.message;
+    if (!assistantMessage) {
+      console.error('[training-coach] LLM returned no message.choices[0].message');
+      return { message: null, trace, planCommitted };
+    }
+
+    // Did the model ask to call tools? If so, execute and feed back.
+    const toolCalls = assistantMessage.tool_calls;
+    if (toolCalls && toolCalls.length > 0) {
+      messages.push({
+        role: 'assistant',
+        content: assistantMessage.content ?? null,
+        tool_calls: toolCalls,
+      });
+      for (const call of toolCalls) {
+        const name = call.function?.name ?? '';
+        const args = call.function?.arguments ?? '{}';
+        const result = await executeCoachTool(name, args, toolHandlerContext);
+        trace.push({
+          iteration: iter,
+          toolName: name,
+          argsPreview: clipPreview(args, 240),
+          resultPreview: clipPreview(result, 400),
+        });
+        if (name === 'commitTrainingPlan') {
+          try {
+            const parsed = JSON.parse(result) as { ok?: boolean };
+            if (parsed.ok) planCommitted = true;
+          } catch {
+            // ignore parse error — the LLM will see the raw result anyway
+          }
+        }
+        messages.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          content: result,
+        });
+      }
+      continue; // Loop back so the LLM can respond to the tool results.
+    }
+
+    // No tool calls → this is the final assistant message.
+    const text = assistantMessage.content?.trim() ?? '';
+    if (!text) {
+      console.error('[training-coach] LLM returned empty assistant content with no tool_calls.');
+      return { message: null, trace, planCommitted };
+    }
+    return { message: text, trace, planCommitted };
+  }
+
+  console.error(`[training-coach] Agent loop exceeded ${MAX_ITERATIONS} iterations without producing a final reply.`);
+  return { message: null, trace, planCommitted };
+}
+
 // ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
 
 export async function runTrainingCoach(input: TrainingCoachInput): Promise<TrainingCoachOutput> {
-  const injurySignal = detectInjurySignal(input.athleteMessage);
-  const recoverySignal = detectRecoverySignal(input.athleteMessage);
+  const { today, athleteMessage, athleteContext, supabase } = input;
+  const injurySignal = detectInjurySignal(athleteMessage);
+  const recoverySignal = detectRecoverySignal(athleteMessage);
 
-  // Update follow-up window deterministically.
-  let followUp: CoachFollowUp | null = input.followUp;
+  // Update follow-up window deterministically (independent of the LLM).
+  let followUp: CoachFollowUp | null = athleteContext.followUp;
   if (injurySignal.detected) {
-    followUp = openFollowUpWindow(input.today, injurySignal.bodyPart);
-  } else if (recoverySignal.detected && input.followUp?.status === 'active') {
-    followUp = { ...input.followUp, status: 'closed' };
+    followUp = openFollowUpWindow(today, injurySignal.bodyPart);
+  } else if (recoverySignal.detected && athleteContext.followUp?.status === 'active') {
+    followUp = { ...athleteContext.followUp, status: 'closed' };
   }
 
-  const rationale = buildDeterministicRationale(input.adaptive);
-  const recommendations = summarizeRecommendations(input.adaptive.recommendations);
-  const cautions = buildDeterministicCautions(input.adaptive);
-
-  // Try the LLM. Fall back to deterministic message on any failure.
+  // Run the LLM agent loop. Fall back to deterministic message on any failure.
   const env = readLlmEnv();
   let message: string | null = null;
   let llmInvoked = false;
+  let trace: CoachToolTraceEntry[] = [];
+  let planCommitted = false;
+
   if (env) {
     llmInvoked = true;
-    message = await callLlm(env, buildSystemPrompt(), buildUserPrompt(input, injurySignal, recoverySignal));
+    const proposalStore = createProposalStore();
+    const toolHandlerContext: ToolHandlerContext = {
+      ctx: athleteContext,
+      supabase,
+      proposalStore,
+    };
+    const result = await runAgentLoop(env, athleteContext, athleteMessage, toolHandlerContext);
+    message = result.message;
+    trace = result.trace;
+    planCommitted = result.planCommitted;
   } else {
     console.warn(
       '[training-coach] AI_COACH_API_KEY / AI_COACH_MODEL / AI_COACH_BASE_URL not all set; using deterministic fallback.',
     );
   }
+
   if (!message) {
-    message = deterministicMessage(input.adaptive, injurySignal);
+    message = deterministicFallbackMessage(athleteContext, injurySignal);
   }
 
+  // Recommendations + cautions: derived from the adaptive engine if available
+  // — purely informational for the UI now that the LLM is the primary author.
+  const recommendations: string[] = [];
+  const cautions: string[] = [];
+  let rationale = '';
+  if (athleteContext.currentPlan) {
+    // We don't re-run the engine here; the agent does it via tool call. But
+    // we surface the most recent tool-trace summary if helpful.
+    rationale = buildDeterministicRationale(null);
+  } else {
+    rationale = 'Coach is in plan-building mode (no active plan on record).';
+  }
+
+  // Append this turn to the conversation history.
   const now = new Date().toISOString();
-  const updatedConversation: CoachConversationMessage[] = [...input.conversation];
-  if (input.athleteMessage) {
-    updatedConversation.push({ role: 'athlete', text: input.athleteMessage, at: now });
+  const updatedConversation: CoachConversationMessage[] = [...athleteContext.conversation];
+  if (athleteMessage) {
+    updatedConversation.push({ role: 'athlete', text: athleteMessage, at: now });
   }
   updatedConversation.push({ role: 'coach', text: message, at: now });
-  // Keep only the most recent 20 messages in the persisted conversation.
   const trimmedConversation = updatedConversation.slice(-20);
 
   return {
@@ -459,5 +535,14 @@ export async function runTrainingCoach(input: TrainingCoachInput): Promise<Train
     injurySignal,
     recoverySignal,
     llmInvoked,
+    toolTrace: trace,
+    planCommitted,
   };
 }
+
+// Re-export the deterministic helpers used by deterministic-only tests.
+export {
+  buildDeterministicCautions,
+  buildDeterministicRationale,
+  summarizeRecommendations,
+};

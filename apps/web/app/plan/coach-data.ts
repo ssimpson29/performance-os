@@ -33,6 +33,10 @@ type WorkoutRow = {
   workout_type: string;
   duration_seconds: number | null;
   perceived_exertion: number | null;
+  source: string;
+  description: string | null;
+  distance_meters: number | null;
+  avg_heart_rate: number | null;
 };
 
 /**
@@ -59,7 +63,9 @@ export async function loadCompletedWorkouts(
   // (multi-source ingest)" in CLAUDE.md.
   const { data, error } = await supabase
     .from('workouts')
-    .select('local_date, workout_type, duration_seconds, perceived_exertion')
+    .select(
+      'local_date, workout_type, duration_seconds, perceived_exertion, source, description, distance_meters, avg_heart_rate',
+    )
     .eq('user_id', userId)
     .is('superseded_by', null)
     .gte('local_date', since)
@@ -74,11 +80,16 @@ export async function loadCompletedWorkouts(
     const durationMinutes = row.duration_seconds ? Math.round(row.duration_seconds / 60) : 0;
     const intensityScore = row.perceived_exertion ?? 5;
     return {
+      localDate: row.local_date,
       day: dayFromIsoDate(row.local_date),
       durationMinutes,
       intensityScore,
       loadScore: durationMinutes + intensityScore * 20,
       sessionType: row.workout_type,
+      source: row.source,
+      description: row.description,
+      distanceMeters: row.distance_meters,
+      avgHeartRate: row.avg_heart_rate,
     };
   });
 }
