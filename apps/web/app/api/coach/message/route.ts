@@ -45,6 +45,14 @@ export async function POST(request: Request) {
   // loadAdaptiveCoachContext later if it shows up in latency.)
   const activePlan = await loadActiveTrainingPlan(supabase, userId);
 
+  // Resolve this week's phase target so the LLM can quote it verbatim
+  // when the athlete asks 'what should I be hitting this week?'.
+  const phasePos = adaptive.phasePosition;
+  const weekTarget =
+    activePlan && phasePos && phasePos.phaseIndex >= 0
+      ? activePlan.phaseBlocks[phasePos.phaseIndex]?.weeks[phasePos.weekIndexInPhase] ?? null
+      : null;
+
   const output = await runTrainingCoach({
     today,
     athleteMessage,
@@ -52,6 +60,8 @@ export async function POST(request: Request) {
     conversation: state.conversation,
     followUp: state.followUp,
     supportTemplates: activePlan?.supportTemplates,
+    recentWorkouts: coachInput.completedWorkouts,
+    weekTarget,
   });
 
   const persisted = await persistTrainingCoachRun(supabase, { userId, today, output });

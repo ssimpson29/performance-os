@@ -1,4 +1,4 @@
-import type { AdaptiveCoachResult, AdaptedRecommendation, SupportTemplate } from '@/lib/training-plan/types';
+import type { AdaptiveCoachResult, AdaptedRecommendation, CompletedWorkout, PhaseWeekTarget, SupportTemplate } from '@/lib/training-plan/types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -52,6 +52,10 @@ export type TrainingCoachInput = {
    * exercises rather than waving at "see your strength sheet".
    */
   supportTemplates?: SupportTemplate[];
+  /** Recent completed workouts so the LLM can answer 'what have I been doing?' questions concretely. */
+  recentWorkouts?: CompletedWorkout[];
+  /** This week's prescribed phase-block target (mileage, vert, fuel, notes) for the LLM to reference verbatim. */
+  weekTarget?: PhaseWeekTarget | null;
 };
 
 export type TrainingCoachOutput = {
@@ -289,6 +293,33 @@ function buildUserPrompt(input: TrainingCoachInput, injury: InjurySignal, recove
   lines.push(`Recovery signal: ${recovery.detected ? 'YES' : 'no'}`);
   lines.push(`Open follow-up window: ${input.followUp?.status === 'active' ? `yes (easy through ${input.followUp.easyThroughDate}, check in ${input.followUp.checkInDate})` : 'no'}`);
   lines.push('');
+  if (input.weekTarget) {
+    lines.push('=== This weeks prescribed phase target ===');
+    const t = input.weekTarget;
+    const targets: string[] = [];
+    if (t.weekLabel) targets.push(`week ${t.weekLabel}`);
+    if (t.mileageTarget) targets.push(`mileage ${t.mileageTarget}`);
+    if (t.vertTarget) targets.push(`vert ${t.vertTarget}`);
+    if (t.saturdayTarget) targets.push(`Sat ${t.saturdayTarget}`);
+    if (t.sundayTarget) targets.push(`Sun ${t.sundayTarget}`);
+    if (t.thursdayTarget) targets.push(`Thu ${t.thursdayTarget}`);
+    if (t.fuelTarget) targets.push(`fuel ${t.fuelTarget}`);
+    if (targets.length) lines.push(`- ${targets.join(' · ')}`);
+    if (t.keyFocus) lines.push(`- Key focus: ${t.keyFocus}`);
+    if (t.notes) lines.push(`- Notes: ${t.notes}`);
+    lines.push('');
+  }
+
+  if (input.recentWorkouts && input.recentWorkouts.length) {
+    lines.push('=== Recent completed workouts ===');
+    for (const w of input.recentWorkouts.slice(-10)) {
+      const duration = w.durationMinutes ? `${w.durationMinutes}min` : '?min';
+      const intensity = `RPE ${w.intensityScore ?? '?'}`;
+      lines.push(`- ${w.day} · ${w.sessionType || 'workout'} · ${duration} · ${intensity}`);
+    }
+    lines.push('');
+  }
+
   if (input.supportTemplates && input.supportTemplates.length) {
     lines.push('=== Support routines available (from the plan workbook) ===');
     for (const tmpl of input.supportTemplates) {
