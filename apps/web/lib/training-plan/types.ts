@@ -101,15 +101,57 @@ export type CompletedWorkout = {
   description?: string | null;
   /** Distance in meters, if recorded. */
   distanceMeters?: number | null;
-  /** Average heart rate, if recorded. */
+  /** Average heart rate (bpm), if recorded. */
   avgHeartRate?: number | null;
+  /** Max heart rate (bpm), if recorded. */
+  maxHeartRate?: number | null;
   /**
-   * Total elevation gain in meters for the workout. Strava reports this on
-   * every activity (`total_elevation_gain`); we stash it in
-   * workouts.metadata.strava.elevationGainM and project it back out for the
-   * coach. Null when the source didn't record it (e.g. treadmill, indoor).
+   * Total elevation gain in meters. Strava reports this on every activity;
+   * we stash in workouts.metadata.strava.elevationGainM and project here.
    */
   elevationGainM?: number | null;
+  /** Highest elevation reached during the workout, in meters. */
+  elevHigh?: number | null;
+  /** Lowest elevation reached during the workout, in meters. */
+  elevLow?: number | null;
+  /** Average speed in m/s. Convert to min/km via (1000 / speed) / 60. */
+  avgSpeedMps?: number | null;
+  /** Peak speed in m/s. */
+  maxSpeedMps?: number | null;
+  /**
+   * Average cadence. For running from Strava this is strides/min for one
+   * foot (multiply ×2 for total cadence). For cycling it's RPM.
+   */
+  avgCadence?: number | null;
+  /** Average power in watts (cycling, or running power if device-reported). */
+  avgPowerWatts?: number | null;
+  /** Max power in watts. */
+  maxPowerWatts?: number | null;
+  /** Weighted (normalized) average power in watts. */
+  weightedAvgPowerWatts?: number | null;
+  /** True if power came from a real power meter, false when estimated. */
+  devicePowerMeter?: boolean | null;
+  /** Athlete-reported RPE 1-10 (Strava lets athletes log this directly). */
+  perceivedExertion?: number | null;
+  /** Strava's Relative Effort 0-300+. Best single-number intensity proxy. */
+  sufferScore?: number | null;
+  /** Energy burned in kcal. */
+  energyKcal?: number | null;
+  /** Average temperature in °C, if the device recorded it. */
+  avgTempC?: number | null;
+  /** Strava gear id (shoe / bike) — useful for tracking shoe mileage. */
+  gearId?: string | null;
+  /** Name of the recording device (e.g. "Apple Watch", "Garmin Forerunner 965"). */
+  deviceName?: string | null;
+  /** True if the workout was on a treadmill/trainer rather than outdoor. */
+  trainer?: boolean | null;
+  /** Strava-side activity title (e.g. "Morning Run", "Long Hill Day"). */
+  activityName?: string | null;
+  /**
+   * Strava's classification of the run: 0=default, 1=race, 2=long run, 3=workout.
+   * Distinct from `sessionType` (which is sport_type like "Run", "TrailRun").
+   */
+  stravaWorkoutType?: number | null;
 };
 
 export type AdaptationAction = 'keep' | 'downgrade' | 'defer-intensity' | 'raise';

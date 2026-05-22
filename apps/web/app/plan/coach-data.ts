@@ -37,26 +37,59 @@ type WorkoutRow = {
   description: string | null;
   distance_meters: number | null;
   avg_heart_rate: number | null;
+  max_heart_rate: number | null;
+  avg_power_watts: number | null;
+  avg_cadence: number | null;
+  energy_kcal: number | null;
   metadata: Record<string, unknown> | null;
 };
 
+type StravaMetadata = {
+  name?: unknown;
+  elevationGainM?: unknown;
+  elevHigh?: unknown;
+  elevLow?: unknown;
+  avgSpeedMps?: unknown;
+  maxSpeedMps?: unknown;
+  maxPowerWatts?: unknown;
+  weightedAvgPowerWatts?: unknown;
+  devicePowerMeter?: unknown;
+  sufferScore?: unknown;
+  avgTempC?: unknown;
+  gearId?: unknown;
+  deviceName?: unknown;
+  trainer?: unknown;
+  stravaWorkoutType?: unknown;
+};
+
+function readStravaMetadata(metadata: Record<string, unknown> | null): StravaMetadata {
+  if (!metadata || typeof metadata !== 'object') return {};
+  const strava = (metadata as { strava?: Record<string, unknown> }).strava;
+  if (!strava || typeof strava !== 'object') return {};
+  return strava as StravaMetadata;
+}
+
+function num(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+function str(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+function bool(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null;
+}
+
 /**
  * Extract elevation gain from a workouts row's metadata. Strava sync stashes
- * it under `metadata.strava.elevationGainM` (see lib/strava/activity-sync.ts).
- * Returns null for sources that don't carry vert (e.g. treadmill, indoor).
+ * it under `metadata.strava.elevationGainM`. Returns null for sources that
+ * don't carry vert (e.g. treadmill, indoor).
  */
 function extractElevationGainM(metadata: Record<string, unknown> | null): number | null {
-  if (!metadata || typeof metadata !== 'object') return null;
-  const strava = (metadata as { strava?: Record<string, unknown> }).strava;
-  if (strava && typeof strava === 'object') {
-    const v = (strava as { elevationGainM?: unknown }).elevationGainM;
-    if (typeof v === 'number') return v;
-  }
-  // Future-proofing: Apple Watch push could land elevation under a different
-  // key. Fall through to null so we don't fabricate a number.
-  const direct = (metadata as { elevationGainM?: unknown }).elevationGainM;
-  if (typeof direct === 'number') return direct;
-  return null;
+  const strava = readStravaMetadata(metadata);
+  return (
+    num(strava.elevationGainM) ??
+    num((metadata as { elevationGainM?: unknown } | null)?.elevationGainM)
+  );
 }
 
 /**
@@ -84,7 +117,7 @@ export async function loadCompletedWorkouts(
   const { data, error } = await supabase
     .from('workouts')
     .select(
-      'local_date, workout_type, duration_seconds, perceived_exertion, source, description, distance_meters, avg_heart_rate, metadata',
+      'local_date, workout_type, duration_seconds, perceived_exertion, source, description, distance_meters, avg_heart_rate, max_heart_rate, avg_power_watts, avg_cadence, energy_kcal, metadata',
     )
     .eq('user_id', userId)
     .is('superseded_by', null)
@@ -99,6 +132,7 @@ export async function loadCompletedWorkouts(
   return (data as WorkoutRow[] | null ?? []).map((row) => {
     const durationMinutes = row.duration_seconds ? Math.round(row.duration_seconds / 60) : 0;
     const intensityScore = row.perceived_exertion ?? 5;
+    const strava = readStravaMetadata(row.metadata);
     return {
       localDate: row.local_date,
       day: dayFromIsoDate(row.local_date),
@@ -110,7 +144,26 @@ export async function loadCompletedWorkouts(
       description: row.description,
       distanceMeters: row.distance_meters,
       avgHeartRate: row.avg_heart_rate,
+      maxHeartRate: row.max_heart_rate,
       elevationGainM: extractElevationGainM(row.metadata),
+      elevHigh: num(strava.elevHigh),
+      elevLow: num(strava.elevLow),
+      avgSpeedMps: num(strava.avgSpeedMps),
+      maxSpeedMps: num(strava.maxSpeedMps),
+      avgCadence: row.avg_cadence,
+      avgPowerWatts: row.avg_power_watts,
+      maxPowerWatts: num(strava.maxPowerWatts),
+      weightedAvgPowerWatts: num(strava.weightedAvgPowerWatts),
+      devicePowerMeter: bool(strava.devicePowerMeter),
+      perceivedExertion: row.perceived_exertion,
+      sufferScore: num(strava.sufferScore),
+      energyKcal: row.energy_kcal,
+      avgTempC: num(strava.avgTempC),
+      gearId: str(strava.gearId),
+      deviceName: str(strava.deviceName),
+      trainer: bool(strava.trainer),
+      activityName: str(strava.name),
+      stravaWorkoutType: num(strava.stravaWorkoutType),
     };
   });
 }

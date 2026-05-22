@@ -64,7 +64,7 @@ const getRecentWorkoutsDefinition: ToolDefinition = {
   function: {
     name: 'getRecentWorkouts',
     description:
-      "Get the athlete's recent completed workouts. Each entry includes ISO date (e.g. '2026-05-21'), day-of-week, session type, duration, distance, average heart rate, elevation gain in meters, source (apple_watch / strava / manual), and any athlete-authored description from Strava (e.g. '+8kg vest'). USE THE DATE FIELDS — when the athlete says 'yesterday' or 'Thursday', match against `localDate`. Use `elevationGainM` for vert questions — it's populated for every Strava activity. When a field is null it really wasn't recorded; when it's a number, quote it. Don't claim a workout doesn't exist or a field is missing without checking the data here. Returns up to the last 14 days by default.",
+      "Get the athlete's recent completed workouts with full Strava + Apple fidelity. Each entry includes ISO date, day-of-week, sport type, Strava activity name, athlete-authored description, duration, distance, elevation (gain / high / low), pace (m/s and derived min/km), cadence, heart rate (avg/max), power (avg/max/normalized + whether it came from a real meter), athlete-logged RPE, Strava suffer score (Relative Effort), calories, gear id, device name, location, treadmill flag, kudos / PR / photo counts, and source. USE THE DATE FIELDS — when the athlete says 'yesterday' or 'Thursday', match against `localDate`. When a field is null it really wasn't recorded by the source; when it's a number, quote it directly. Don't claim a workout doesn't exist or a field is missing without checking the data here. Suffer score and RPE are the best intensity proxies; HR + pace + elevation give the full physiological picture. Returns the last 14 days by default.",
     parameters: {
       type: 'object',
       properties: {
@@ -76,6 +76,12 @@ const getRecentWorkoutsDefinition: ToolDefinition = {
     },
   },
 };
+
+function paceMinPerKmFromMps(speedMps: number | null | undefined): number | null {
+  if (typeof speedMps !== 'number' || speedMps <= 0) return null;
+  // (1 km / m/s) / 60s → minutes per km. Round to 2 decimals.
+  return Math.round(((1000 / speedMps) / 60) * 100) / 100;
+}
 
 const handleGetRecentWorkouts: ToolHandler = async (args, { ctx }) => {
   const a = (args as { days?: number } | null) ?? {};
@@ -93,13 +99,37 @@ const handleGetRecentWorkouts: ToolHandler = async (args, { ctx }) => {
       day: w.day,
       sessionType: w.sessionType,
       source: w.source,
+      activityName: w.activityName,
+      description: w.description,
       durationMinutes: w.durationMinutes,
       distanceMeters: w.distanceMeters,
-      avgHeartRate: w.avgHeartRate,
+      // Pace: provide the raw m/s value Strava sends AND the derived min/km
+      // so the LLM doesn't have to do unit math. Both null when not recorded.
+      avgSpeedMps: w.avgSpeedMps,
+      maxSpeedMps: w.maxSpeedMps,
+      avgPaceMinPerKm: paceMinPerKmFromMps(w.avgSpeedMps),
+      maxPaceMinPerKm: paceMinPerKmFromMps(w.maxSpeedMps),
       elevationGainM: w.elevationGainM,
+      elevHigh: w.elevHigh,
+      elevLow: w.elevLow,
+      avgHeartRate: w.avgHeartRate,
+      maxHeartRate: w.maxHeartRate,
+      avgCadence: w.avgCadence,
+      avgPowerWatts: w.avgPowerWatts,
+      maxPowerWatts: w.maxPowerWatts,
+      weightedAvgPowerWatts: w.weightedAvgPowerWatts,
+      devicePowerMeter: w.devicePowerMeter,
+      perceivedExertion: w.perceivedExertion,
+      sufferScore: w.sufferScore,
+      energyKcal: w.energyKcal,
+      avgTempC: w.avgTempC,
+      gearId: w.gearId,
+      deviceName: w.deviceName,
+      trainer: w.trainer,
+      stravaWorkoutType: w.stravaWorkoutType,
+      // Derived: simple intensity proxy = perceived_exertion ?? 5; loadScore = duration + intensity * 20.
       intensityScore: w.intensityScore,
       loadScore: w.loadScore,
-      description: w.description,
     })),
   });
 };

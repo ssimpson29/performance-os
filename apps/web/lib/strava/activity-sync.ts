@@ -55,15 +55,55 @@ export type StravaActivity = {
   description?: string | null;
   type?: string;
   sport_type?: string;
+  /** Strava's internal classification: 0=default, 1=race, 2=long run, 3=workout. Useful for plan-matching. */
+  workout_type?: number | null;
   distance?: number;        // meters
   moving_time?: number;     // seconds
   elapsed_time?: number;    // seconds
-  start_date?: string;      // ISO
-  start_date_local?: string;
+  start_date?: string;      // ISO UTC
+  start_date_local?: string; // ISO local (no tz suffix)
+  timezone?: string;
+  utc_offset?: number;       // seconds
   average_heartrate?: number;
   max_heartrate?: number;
   total_elevation_gain?: number;
+  elev_high?: number;
+  elev_low?: number;
+  /** Average pace as m/s. Convert: (1000/avg_speed)/60 = min/km. */
+  average_speed?: number;
+  max_speed?: number;
+  /** Running: strides/minute for one foot (multiply ×2 for total cadence). Cycling: RPM. */
+  average_cadence?: number;
+  average_watts?: number;
+  weighted_average_watts?: number;
+  max_watts?: number;
+  /** True when watts come from a real power meter, false when Strava estimates them. */
+  device_watts?: boolean;
   kilojoules?: number;
+  calories?: number;
+  /** Strava's "Relative Effort" (0-300+). Best single-number intensity signal. */
+  suffer_score?: number | null;
+  /** Athlete-reported RPE from Strava (1-10, optional). */
+  perceived_exertion?: number | null;
+  /** True if the athlete prefers their PE over Strava's suffer_score. */
+  prefer_perceived_exertion?: boolean | null;
+  average_temp?: number;
+  gear_id?: string | null;
+  device_name?: string | null;
+  trainer?: boolean;
+  commute?: boolean;
+  manual?: boolean;
+  /** Location strings; may be null when athlete privacy-zoned the activity. */
+  location_city?: string | null;
+  location_state?: string | null;
+  location_country?: string | null;
+  /** Counts that help the coach gauge what's around this workout. */
+  achievement_count?: number;
+  kudos_count?: number;
+  pr_count?: number;
+  total_photo_count?: number;
+  /** Strava map polyline summary — keep for later if we want to render the route. */
+  map?: { id?: string; summary_polyline?: string };
 };
 
 export type ProcessActivityResult = 'inserted' | 'linked' | 'alreadyPresent' | 'failed';
@@ -161,15 +201,49 @@ export async function processStravaActivity(
     energy_kcal: candidate.energyKcal,
     avg_heart_rate: candidate.avgHr,
     max_heart_rate: candidate.maxHr,
+    avg_power_watts: candidate.avgPowerWatts,
+    avg_cadence: candidate.avgCadence,
+    perceived_exertion: candidate.perceivedExertion,
     description: candidate.description,
     superseded_by: supersededBy,
+    // `metadata.strava` carries every Strava-only field that doesn't have a
+    // dedicated column. The coach reads from here for "what was your pace /
+    // suffer score / cadence on yesterday's run?" without needing a separate
+    // table. Keep keys camelCased; coach-tools surfaces them by name.
     metadata: {
       strava: {
         activityId: candidate.externalId,
-        name: activity.name ?? null,
+        name: candidate.activityName,
         elevationGainM: candidate.elevationGainM,
+        elevHigh: candidate.elevHigh,
+        elevLow: candidate.elevLow,
+        avgSpeedMps: candidate.avgSpeedMps,
+        maxSpeedMps: candidate.maxSpeedMps,
+        maxPowerWatts: candidate.maxPowerWatts,
+        weightedAvgPowerWatts: candidate.weightedAvgPowerWatts,
+        devicePowerMeter: candidate.devicePowerMeter,
+        sufferScore: candidate.sufferScore,
+        preferPerceivedExertion: candidate.preferPerceivedExertion,
+        avgTempC: candidate.avgTempC,
+        gearId: candidate.gearId,
+        deviceName: candidate.deviceName,
+        trainer: candidate.trainer,
+        commute: candidate.commute,
+        manual: candidate.manual,
+        locationCity: candidate.locationCity,
+        locationState: candidate.locationState,
+        locationCountry: candidate.locationCountry,
+        achievementCount: candidate.achievementCount,
+        kudosCount: candidate.kudosCount,
+        prCount: candidate.prCount,
+        photoCount: candidate.photoCount,
+        mapPolyline: candidate.mapPolyline,
+        stravaWorkoutType: candidate.stravaWorkoutType,
       },
     },
+    // Full original Strava response — preserves anything we didn't explicitly
+    // map so future code can mine it without re-fetching from Strava.
+    raw_payload: activity as unknown as Record<string, unknown>,
   });
   if (insertError) {
     console.error('strava sync: failed to insert workout', insertError);
@@ -242,6 +316,14 @@ async function fetchActivities(accessToken: string, afterUnix: number): Promise<
   return (await res.json()) as StravaActivity[];
 }
 
+/**
+ * Normalize a Strava activity into the shape the dedup matcher + insert path
+ * expects, plus every additional field the coach can reason about. We capture
+ * everything Strava sends and either persist it in a dedicated column (HR,
+ * power, cadence, RPE) or stash it under `metadata.strava` for later use.
+ * Strava returns several numeric fields as floats; integer DB columns reject
+ * floats (22P02) so we round at the boundary.
+ */
 function activityToCandidate(activity: StravaActivity): WorkoutLike & {
   externalId: string;
   description: string | null;
@@ -249,26 +331,66 @@ function activityToCandidate(activity: StravaActivity): WorkoutLike & {
   avgHr: number | null;
   maxHr: number | null;
   elevationGainM: number | null;
+  elevHigh: number | null;
+  elevLow: number | null;
+  avgSpeedMps: number | null;
+  maxSpeedMps: number | null;
+  avgCadence: number | null;
+  avgPowerWatts: number | null;
+  maxPowerWatts: number | null;
+  weightedAvgPowerWatts: number | null;
+  devicePowerMeter: boolean | null;
+  perceivedExertion: number | null;
+  sufferScore: number | null;
+  preferPerceivedExertion: boolean | null;
   energyKcal: number | null;
+  avgTempC: number | null;
+  gearId: string | null;
+  deviceName: string | null;
+  trainer: boolean | null;
+  commute: boolean | null;
+  manual: boolean | null;
+  locationCity: string | null;
+  locationState: string | null;
+  locationCountry: string | null;
+  achievementCount: number | null;
+  kudosCount: number | null;
+  prCount: number | null;
+  photoCount: number | null;
+  mapPolyline: string | null;
+  stravaWorkoutType: number | null;
   localDate: string;
   endedAt: string | null;
+  activityName: string | null;
 } {
   const startedAt = activity.start_date ?? new Date().toISOString();
   const localDate = (activity.start_date_local ?? startedAt).slice(0, 10);
   const duration = activity.moving_time ?? activity.elapsed_time ?? null;
   const endedAt = duration && activity.start_date ? new Date(new Date(activity.start_date).getTime() + duration * 1000).toISOString() : null;
-  // Strava returns average_heartrate / max_heartrate as floats (e.g. 141.4).
-  // The DB columns are integers, so Postgres rejected the raw floats with
-  // 22P02 "invalid input syntax for type integer" — every run with HR data
-  // silently failed to insert. Round here at the boundary.
+
+  // Integer DB columns — round floats at the boundary so Postgres doesn't 22P02.
   const avgHr = typeof activity.average_heartrate === 'number' ? Math.round(activity.average_heartrate) : null;
   const maxHr = typeof activity.max_heartrate === 'number' ? Math.round(activity.max_heartrate) : null;
+  const avgPowerWatts = typeof activity.average_watts === 'number' ? Math.round(activity.average_watts) : null;
+  const maxPowerWatts = typeof activity.max_watts === 'number' ? Math.round(activity.max_watts) : null;
+  const weightedAvgPowerWatts =
+    typeof activity.weighted_average_watts === 'number' ? Math.round(activity.weighted_average_watts) : null;
+
+  // Calories preferred over kilojoules-from-power (which is cycling-specific).
+  const energyKcal =
+    typeof activity.calories === 'number'
+      ? Math.round(activity.calories)
+      : typeof activity.kilojoules === 'number'
+        ? Math.round(activity.kilojoules)
+        : null;
+
   // Treat empty-string description from Strava as null so the DB has a
   // consistent "no description" sentinel.
   const description =
     typeof activity.description === 'string' && activity.description.length > 0
       ? activity.description
       : null;
+
   return {
     externalId: String(activity.id),
     workoutType: activity.sport_type ?? activity.type ?? 'Workout',
@@ -279,9 +401,39 @@ function activityToCandidate(activity: StravaActivity): WorkoutLike & {
     avgHr,
     maxHr,
     elevationGainM: activity.total_elevation_gain ?? null,
-    energyKcal: activity.kilojoules != null ? Math.round(activity.kilojoules) : null,
+    elevHigh: typeof activity.elev_high === 'number' ? activity.elev_high : null,
+    elevLow: typeof activity.elev_low === 'number' ? activity.elev_low : null,
+    avgSpeedMps: typeof activity.average_speed === 'number' ? activity.average_speed : null,
+    maxSpeedMps: typeof activity.max_speed === 'number' ? activity.max_speed : null,
+    avgCadence: typeof activity.average_cadence === 'number' ? activity.average_cadence : null,
+    avgPowerWatts,
+    maxPowerWatts,
+    weightedAvgPowerWatts,
+    devicePowerMeter: typeof activity.device_watts === 'boolean' ? activity.device_watts : null,
+    perceivedExertion:
+      typeof activity.perceived_exertion === 'number' ? Math.round(activity.perceived_exertion) : null,
+    sufferScore: typeof activity.suffer_score === 'number' ? Math.round(activity.suffer_score) : null,
+    preferPerceivedExertion:
+      typeof activity.prefer_perceived_exertion === 'boolean' ? activity.prefer_perceived_exertion : null,
+    energyKcal,
+    avgTempC: typeof activity.average_temp === 'number' ? activity.average_temp : null,
+    gearId: typeof activity.gear_id === 'string' ? activity.gear_id : null,
+    deviceName: typeof activity.device_name === 'string' ? activity.device_name : null,
+    trainer: typeof activity.trainer === 'boolean' ? activity.trainer : null,
+    commute: typeof activity.commute === 'boolean' ? activity.commute : null,
+    manual: typeof activity.manual === 'boolean' ? activity.manual : null,
+    locationCity: typeof activity.location_city === 'string' ? activity.location_city : null,
+    locationState: typeof activity.location_state === 'string' ? activity.location_state : null,
+    locationCountry: typeof activity.location_country === 'string' ? activity.location_country : null,
+    achievementCount: typeof activity.achievement_count === 'number' ? activity.achievement_count : null,
+    kudosCount: typeof activity.kudos_count === 'number' ? activity.kudos_count : null,
+    prCount: typeof activity.pr_count === 'number' ? activity.pr_count : null,
+    photoCount: typeof activity.total_photo_count === 'number' ? activity.total_photo_count : null,
+    mapPolyline: typeof activity.map?.summary_polyline === 'string' ? activity.map.summary_polyline : null,
+    stravaWorkoutType: typeof activity.workout_type === 'number' ? activity.workout_type : null,
     localDate,
     endedAt,
+    activityName: typeof activity.name === 'string' ? activity.name : null,
     source: 'strava',
   };
 }
