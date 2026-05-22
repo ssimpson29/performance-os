@@ -304,7 +304,9 @@ async function callLlm(env: LlmEnv, systemPrompt: string, userPrompt: string): P
           { role: 'user', content: userPrompt },
         ],
         temperature: 0.3,
-        max_tokens: 500,
+        // Use OpenAI's newer parameter so reasoning-class models (o1/o3/gpt-5)
+        // don't reject the request with `unsupported_parameter: max_tokens`.
+        max_completion_tokens: 500,
       }),
     });
     if (!response.ok) return null;

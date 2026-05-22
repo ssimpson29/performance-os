@@ -363,7 +363,11 @@ async function callLlm(env: LlmEnv, systemPrompt: string, userPrompt: string): P
           { role: 'user', content: userPrompt },
         ],
         temperature: 0.4,
-        max_tokens: 400,
+        // OpenAI deprecated `max_tokens` in favor of `max_completion_tokens`
+        // for newer reasoning-class models (o1/o3/gpt-5/gpt-5.5). The newer
+        // parameter is also accepted by gpt-4o-class models, so we use it
+        // unconditionally going forward.
+        max_completion_tokens: 400,
       }),
     });
     if (!response.ok) {

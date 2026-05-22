@@ -117,7 +117,9 @@ export async function extractPanelFromImage(args: {
           },
         ],
         temperature: 0.0,
-        max_tokens: 2000,
+        // Use OpenAI's newer parameter so reasoning-class models (o1/o3/gpt-5)
+        // don't reject the request with `unsupported_parameter: max_tokens`.
+        max_completion_tokens: 2000,
         response_format: { type: 'json_object' },
       }),
     });
