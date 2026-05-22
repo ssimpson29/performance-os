@@ -1,44 +1,50 @@
+# IMPORTANT: gitignore-style patterns. Use a leading slash to anchor a
+# pattern to the repo root so an unrelated nested directory with the
+# same name (e.g. apps/web/app/docs) isn't accidentally excluded.
+
 # Project-local skill scripts / agent metadata — not needed for the build.
-.goose/
-.skills/
-skills/
+/.goose/
+/.skills/
+/skills/
 
 # Non-Next-app workspaces (Vercel builds apps/web only).
-apps/ios/
-workers/
-research/
-supabase/
+/apps/ios/
+/workers/
+/research/
+/supabase/
 
-# Docs are useful in repo but not in deploy.
-docs/
+# Top-level docs are useful in repo but not in deploy. The in-app
+# /docs route at apps/web/app/docs/ MUST keep shipping — do not drop
+# the leading slash here.
+/docs/
 
 # Local agent scratchpads.
-.claude/
-.adal/
-.agents/
-.aider-desk/
-.augment/
-.bob/
-.codebuddy/
-.continue/
-.cortex/
-.crush/
-.devin/
-.factory/
-.forge/
-.iflow/
-.junie/
-.kilocode/
-.kiro/
-.kode/
-.openhands/
-.qwen/
-.roo/
-.tabnine/
-.trae/
-.vibe/
-.windsurf/
-.zencoder/
+/.claude/
+/.adal/
+/.agents/
+/.aider-desk/
+/.augment/
+/.bob/
+/.codebuddy/
+/.continue/
+/.cortex/
+/.crush/
+/.devin/
+/.factory/
+/.forge/
+/.iflow/
+/.junie/
+/.kilocode/
+/.kiro/
+/.kode/
+/.openhands/
+/.qwen/
+/.roo/
+/.tabnine/
+/.trae/
+/.vibe/
+/.windsurf/
+/.zencoder/
 
 # Build artifacts that Vercel regenerates.
 apps/web/.next/
