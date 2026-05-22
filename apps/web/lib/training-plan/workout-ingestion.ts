@@ -1,5 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import {
+  linkAppleRowsToStravaMatches,
+  type AppleRowForMerge,
+  type AppleStravaMergeResult,
+} from '@/lib/workouts/apple-strava-merge';
+
 import { matchPlannedSessionsToWorkouts as computeMatchSummary } from './plan-matching';
 import type {
   ActualWorkoutForMatching,
@@ -274,6 +280,7 @@ export async function importActualWorkouts(
           unmatchedActual: 0,
         },
       },
+      appleStravaMerge: null as AppleStravaMergeResult | null,
     };
   }
 
@@ -281,10 +288,41 @@ export async function importActualWorkouts(
   const { data: persistedWorkouts, error: workoutsError } = await supabase
     .from('workouts')
     .upsert(workoutRows, { onConflict: 'user_id,source,external_id' })
-    .select('id, external_id');
+    .select('id, external_id, source, workout_type, started_at, duration_seconds, description');
 
   if (workoutsError || !persistedWorkouts) {
     throw new Error(workoutsError?.message ?? 'Failed to persist workouts');
+  }
+
+  // Phase 3 of the Strava integration: if any of the newly-upserted rows are
+  // Apple-sourced, run the duplicate matcher against pre-existing Strava
+  // rows so a Strava row that arrived first gets linked to the Apple row
+  // (which is canonical for metrics) and its description is forwarded onto
+  // the Apple row. The Strava-side merge already handles the opposite
+  // ordering. Failure here is non-fatal to the workout import — we log and
+  // continue so a transient merge issue can't block the Apple sync.
+  const persistedAppleRows: AppleRowForMerge[] = (persistedWorkouts as Array<Record<string, unknown>>)
+    .filter((row) => row.source === 'apple_health' || row.source === 'apple_watch')
+    .map((row) => ({
+      id: String(row.id),
+      source: row.source as 'apple_health' | 'apple_watch',
+      external_id: String(row.external_id),
+      workout_type: String(row.workout_type),
+      started_at: String(row.started_at),
+      duration_seconds:
+        typeof row.duration_seconds === 'number' ? row.duration_seconds : null,
+      description: typeof row.description === 'string' ? row.description : null,
+    }));
+  let appleStravaMerge: AppleStravaMergeResult | null = null;
+  if (persistedAppleRows.length > 0) {
+    try {
+      appleStravaMerge = await linkAppleRowsToStravaMatches(supabase, {
+        userId: input.userId,
+        appleRows: persistedAppleRows,
+      });
+    } catch (err) {
+      console.error('apple-strava-merge skipped:', err);
+    }
   }
 
   const dateRange = getDateRange(normalized.workouts);
@@ -338,5 +376,6 @@ export async function importActualWorkouts(
   return {
     importedWorkouts: normalized.workouts.length,
     matching,
+    appleStravaMerge,
   };
 }

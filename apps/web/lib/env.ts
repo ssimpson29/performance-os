@@ -20,6 +20,13 @@ function readOuraEnv() {
   };
 }
 
+function readStravaEnv() {
+  return {
+    stravaClientId: process.env.STRAVA_CLIENT_ID,
+    stravaClientSecret: process.env.STRAVA_CLIENT_SECRET,
+  };
+}
+
 export function getSupabaseEnv() {
   return readSupabaseEnv();
 }
@@ -90,5 +97,32 @@ export function requireOuraEnv() {
     appUrl,
     ouraClientId,
     ouraClientSecret,
+  };
+}
+
+export function getStravaEnv() {
+  return readStravaEnv();
+}
+
+export function hasStravaEnv() {
+  const { appUrl } = readAppEnv();
+  const { stravaClientId, stravaClientSecret } = readStravaEnv();
+  return Boolean(appUrl && stravaClientId && stravaClientSecret);
+}
+
+export function requireStravaEnv() {
+  const { appUrl } = readAppEnv();
+  const { stravaClientId, stravaClientSecret } = readStravaEnv();
+
+  if (!appUrl || !stravaClientId || !stravaClientSecret) {
+    throw new Error(
+      'Missing Strava environment variables. Set NEXT_PUBLIC_APP_URL, STRAVA_CLIENT_ID, and STRAVA_CLIENT_SECRET.',
+    );
+  }
+
+  return {
+    appUrl,
+    stravaClientId,
+    stravaClientSecret,
   };
 }

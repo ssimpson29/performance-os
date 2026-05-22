@@ -115,13 +115,25 @@ npm run test --workspace @performance-os/web   # vitest run
   - `POST /api/imports/apple-health`
   - `GET  /api/imports/oura/connect`
   - `POST /api/sync/oura`
+  - `GET  /api/imports/strava/connect`
+  - `POST /api/sync/strava`
   - `POST /api/coach/message`
   - `POST /api/longevity/evaluate`
   - `POST /api/imports/biomarker-panel`
   - `POST /api/imports/biomarker-panel-image`
-- **Intentional exception:** `POST /api/imports/apple-health/push`
-  uses signed URL + HMAC signature for iPhone Shortcut automation. Do
-  NOT convert to cookie auth. The signed URL itself is the credential.
+- **Intentional exceptions:**
+  - `POST /api/imports/apple-health/push` uses signed URL + HMAC
+    signature for iPhone Shortcut automation. Do NOT convert to cookie
+    auth. The signed URL itself is the credential.
+  - `GET /api/imports/oura/callback` and `GET /api/imports/strava/callback`
+    both run as the OAuth-redirect-target, which arrives at our domain
+    with no Supabase session cookie (the browser was just on
+    cloud.ouraring.com / www.strava.com). They carry the athlete
+    binding in the OAuth `state` param (`oura-import:<userId>` /
+    `strava-import:<userId>`), built by the connect route from
+    `getAuthenticatedUserId()`. If `state` is missing the userId, the
+    callback short-circuits to a "code received but unbound" response
+    rather than persisting a row.
 - Two athletes signed into the same deployment must never read or
   write each other's data through browser flows.
 
@@ -211,6 +223,36 @@ Persist race context on `training_plans`:
 ### Plan-vs-actual workflow
 The training plan defines weekly structure baseline. The coach adapts daily workouts using recent completed load + recovery context. Both Training Coach and Longevity Guru are LLM-driven agents, not static rules.
 
+### Duplicate-workout handling (multi-source ingest)
+The same training session can land in Performance OS twice: Apple Watch
+auto-uploads to Strava, and the athlete sometimes manually adds notes on
+Strava. We keep **one row per source** so no source-specific data is
+lost, and resolve the duplicate via a `superseded_by` self-reference on
+the `workouts` table.
+
+- **Matcher.** Pure helpers in `apps/web/lib/workouts/duplicate-matching.ts`:
+  `workoutFamily` collapses Strava/Apple/manual type vocabularies to
+  `run | bike | walk | hike | strength | other`; `isSameSession`
+  requires matching family, `started_at` within ±120s, and (when both
+  have one) `durationSeconds` within ±10%; `findExistingMatch` returns
+  the first hit.
+- **Source precedence.** Apple Watch wins for metrics (HR, distance,
+  duration, segments, cadence) — its `workouts` row is canonical.
+  Strava wins for the written description, which gets forwarded onto
+  the canonical Apple row's `description` column.
+- **Link direction.** The Strava row's `superseded_by` points at the
+  canonical Apple row. Downstream readers (e.g.
+  `loadCompletedWorkouts` in `apps/web/app/plan/coach-data.ts`) should
+  filter `.is('superseded_by', null)` so the coach doesn't
+  double-count an overlapping session.
+- **Ordering robustness.** Either source can arrive first.
+  `lib/strava/activity-sync.ts` runs the matcher on Strava-pulled
+  activities against existing workouts and sets `superseded_by` when an
+  Apple row already exists. The Apple-side merge (Phase 3 of
+  `docs/plans/2026-05-22-strava-integration.md`) handles the opposite
+  ordering by running the same matcher inside
+  `POST /api/imports/apple-health/push` after upsert.
+
 ---
 
 ## Open Work (priority order)
@@ -243,10 +285,47 @@ The training plan defines weekly structure baseline. The coach adapts daily work
   or other future cross-write keys). Injury detections insert a
   `health_events` row with `metadata.source = 'coach_message'`.
 
-### 4. Plan docs index (existing)
+### 4. Strava integration — Phase 2 done (2026-05-22)
+- Schema: migrations `007_strava_integration.sql` (workout_source enum +
+  `description` + `superseded_by` columns + workouts(user_id, started_at)
+  index) and `008_strava_provider.sql` (integration_provider enum).
+- Routes (auth-scoped):
+  - `GET  /api/imports/strava/connect` — builds the OAuth URL with
+    `state=strava-import:<userId>` from `getAuthenticatedUserId()`.
+  - `GET  /api/imports/strava/callback` — exchanges the code, upserts
+    `user_integrations` (provider='strava') from the state-derived
+    userId, redirects to `/settings/integrations?strava=connected`.
+  - `POST /api/sync/strava` — pulls recent activities and runs the
+    duplicate matcher; returns a summary.
+- Sync orchestration in `apps/web/lib/strava/activity-sync.ts`:
+  loads integration row, refreshes the Strava token within 60s of
+  expiry, fetches `/athlete/activities?after=<unix>`, normalizes each
+  activity into a candidate, runs `findExistingMatch` against the
+  athlete's workouts in the same window, inserts Strava rows with
+  `superseded_by` set when an Apple-sourced match exists, and forwards
+  the description onto the canonical Apple row when the Apple row had
+  no description. Idempotent on repeated runs via
+  `(source, external_id)` lookup.
+- Settings UI: `components/integrations/strava-card.ts` (server) +
+  `sync-strava-button.tsx` (client) on `/settings/integrations`.
+- **Phase 3 done (2026-05-22):** `apps/web/lib/workouts/apple-strava-merge.ts`
+  runs after the Apple Health / Apple Watch upsert inside
+  `importActualWorkouts` — for each newly-persisted Apple row it finds a
+  still-canonical Strava workout in the same time window, sets that
+  Strava row's `superseded_by` to the Apple row, and forwards the
+  Strava description onto the Apple row when the Apple row has none.
+  Failure is logged and non-fatal so a transient merge issue can't
+  block the Apple sync. The coach data loader
+  (`apps/web/app/plan/coach-data.ts::loadCompletedWorkouts`) now filters
+  `.is('superseded_by', null)` so a duplicated session counts once.
+
+### 5. Plan docs index (existing)
 - `docs/plans/2026-05-04-training-import-and-adaptive-coach.md`
 - `docs/plans/2026-05-05-iphone-first-app-mvp.md`
 - `docs/plans/2026-05-07-production-deployment-and-ios-backend.md`
+- `docs/plans/2026-05-21-auth-scoping.md`
+- `docs/plans/2026-05-21-longevity-guru.md`
+- `docs/plans/2026-05-22-strava-integration.md`
 - `docs/deploy.md` — in-repo deployment guide (env matrix, Vercel
   recipe, post-deploy steps).
 

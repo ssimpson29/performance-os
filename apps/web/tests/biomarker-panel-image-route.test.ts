@@ -24,8 +24,10 @@ function imageFile(mime = 'image/jpeg') {
 }
 
 describe('POST /api/imports/biomarker-panel-image', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetAllMocks();
+    const { resetRateLimitStore } = await import('../lib/rate-limit');
+    resetRateLimitStore();
     // Default matcher: returns null. Tests override per-call.
     matchRawNameToCatalogKey.mockReturnValue(null);
   });

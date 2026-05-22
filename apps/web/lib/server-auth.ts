@@ -32,12 +32,22 @@ export async function createRequestSupabaseClient(): Promise<SupabaseClient> {
  * only throws if Supabase env vars are missing (deployment misconfiguration).
  */
 export async function getAuthenticatedUser(): Promise<User | null> {
-  const supabase = await createRequestSupabaseClient();
-  const { data, error } = await supabase.auth.getUser();
-  if (error || !data?.user) {
+  // Catch every failure mode (missing env, network error, malformed cookies,
+  // invalid API key) and return null so the caller treats the visitor as
+  // unauthenticated. The page renders the sign-in CTA instead of a 500.
+  try {
+    const supabase = await createRequestSupabaseClient();
+    const { data, error } = await supabase.auth.getUser();
+    if (error || !data?.user) {
+      return null;
+    }
+    return data.user;
+  } catch (err) {
+    // Soft-fail; the unauth path is always the safe fallback. Log so
+    // Vercel function logs still capture the misconfiguration.
+    console.error('getAuthenticatedUser failed:', err instanceof Error ? err.message : err);
     return null;
   }
-  return data.user;
 }
 
 /**

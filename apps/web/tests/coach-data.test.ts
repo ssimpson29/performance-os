@@ -11,13 +11,13 @@ import {
 type QueryResult = { data: unknown; error: { message: string } | null };
 
 function makeChain(result: QueryResult) {
-  // Supabase chain: from().select().eq().gte().lte().order() -> resolves
+  // Supabase chain: from().select().eq().is().gte().lte().order() -> resolves
   // Each method returns the same chain; only the terminal "then" matters.
   const thenable = {
     then: (resolve: (r: QueryResult) => void) => resolve(result),
   };
   const chain: Record<string, unknown> = {};
-  for (const m of ['select', 'eq', 'gte', 'lte', 'order', 'limit']) {
+  for (const m of ['select', 'eq', 'is', 'gte', 'lte', 'order', 'limit']) {
     chain[m] = vi.fn(() => chain);
   }
   Object.assign(chain, thenable);
@@ -97,6 +97,31 @@ describe('loadCompletedWorkouts', () => {
       workouts: { data: null, error: { message: 'permission denied' } },
     });
     await expect(loadCompletedWorkouts(supabase, 'user-1')).rejects.toThrow(/permission denied/);
+  });
+
+  it('filters out superseded rows so duplicate Strava + Apple sessions are counted once', async () => {
+    // The chain mock returns the same chain object from every method, so we
+    // can interrogate the .is() call directly to confirm the canonical
+    // filter is applied. The actual filtering happens server-side; the
+    // contract we care about is that the query asks for it.
+    const chain = makeChain({
+      data: [
+        {
+          local_date: '2026-05-16',
+          workout_type: 'Long Run',
+          duration_seconds: 7200,
+          perceived_exertion: 7,
+        },
+      ],
+      error: null,
+    });
+    const supabase = {
+      from: vi.fn(() => chain),
+    } as unknown as Parameters<typeof loadCompletedWorkouts>[0];
+
+    await loadCompletedWorkouts(supabase, 'user-1', { today: '2026-05-21' });
+
+    expect(chain.is).toHaveBeenCalledWith('superseded_by', null);
   });
 });
 

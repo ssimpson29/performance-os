@@ -145,7 +145,10 @@ describe('POST /api/imports/biomarker-panel', () => {
     expect(rows[0].reference_high).toBe(130);
     expect(rows[0].optimal_high).toBe(80);
     expect(rows[0].status).toBe('in_range');
-    expect(rows[0].metadata).toBeUndefined(); // marker-row metadata is per-result, not the lab panel
+    // Each marker row carries its own evaluatedAt + rationale metadata
+    // (set by the route since the route was built; not added in this commit).
+    expect(rows[0].metadata).toMatchObject({ rationale: expect.any(String) });
+    expect(typeof (rows[0].metadata as { evaluatedAt: string }).evaluatedAt).toBe('string');
 
     // The lab_panels insert should also carry source + importedAt metadata.
     const panelInsert = calls.find((c) => c.table === 'lab_panels' && c.method === 'insert');

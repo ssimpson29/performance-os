@@ -67,6 +67,15 @@ async function loadDailyLongevityState(
 }
 
 export async function loadLongevityPageState(args?: { today?: string }): Promise<LongevityPageState> {
+  try {
+    return await loadLongevityPageStateUnsafe(args);
+  } catch (err) {
+    console.error('loadLongevityPageState failed:', err instanceof Error ? err.message : err);
+    return { kind: 'unauthenticated' };
+  }
+}
+
+async function loadLongevityPageStateUnsafe(args?: { today?: string }): Promise<LongevityPageState> {
   const user = await getAuthenticatedUser();
   if (!user) {
     return { kind: 'unauthenticated' };

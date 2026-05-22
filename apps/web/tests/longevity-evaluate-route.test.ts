@@ -53,8 +53,10 @@ function makeRequest(body: unknown) {
 }
 
 describe('POST /api/longevity/evaluate', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetAllMocks();
+    const { resetRateLimitStore } = await import('../lib/rate-limit');
+    resetRateLimitStore();
     createServerSupabaseClient.mockReturnValue(
       makeSupabase({
         biomarker_results: {

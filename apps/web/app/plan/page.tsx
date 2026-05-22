@@ -32,6 +32,15 @@ type TrainingPlanRow = {
 };
 
 async function loadPlanView(): Promise<PlanView> {
+  try {
+    return await loadPlanViewUnsafe();
+  } catch (err) {
+    console.error('loadPlanView failed:', err instanceof Error ? err.message : err);
+    return { kind: 'unauthenticated' };
+  }
+}
+
+async function loadPlanViewUnsafe(): Promise<PlanView> {
   const user = await getAuthenticatedUser();
   if (!user) return { kind: 'unauthenticated' };
 

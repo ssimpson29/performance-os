@@ -52,10 +52,16 @@ export async function loadCompletedWorkouts(
   const lookback = options.lookbackDays ?? DEFAULT_LOOKBACK_DAYS;
   const since = isoDateAddDays(today, -lookback);
 
+  // Canonical-only filter: when the same training session lives in both
+  // Apple Watch and Strava rows, the Strava row's `superseded_by` points at
+  // the Apple row. Excluding superseded rows here prevents the coach from
+  // counting the same workout twice. See "Duplicate-workout handling
+  // (multi-source ingest)" in CLAUDE.md.
   const { data, error } = await supabase
     .from('workouts')
     .select('local_date, workout_type, duration_seconds, perceived_exertion')
     .eq('user_id', userId)
+    .is('superseded_by', null)
     .gte('local_date', since)
     .lte('local_date', today)
     .order('local_date', { ascending: true });

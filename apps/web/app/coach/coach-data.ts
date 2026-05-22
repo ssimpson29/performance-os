@@ -73,36 +73,43 @@ async function loadPlanName(supabase: SupabaseClient, userId: string): Promise<s
  * The CoachChat client component drives /api/coach/message on user input.
  */
 export async function loadCoachPageState(args?: { today?: string }): Promise<CoachPageState> {
-  const user = await getAuthenticatedUser();
-  if (!user) {
+  try {
+    const user = await getAuthenticatedUser();
+    if (!user) {
+      return { kind: 'unauthenticated' };
+    }
+
+    const supabase = createServerSupabaseClient();
+    const plan = await loadActiveTrainingPlan(supabase, user.id);
+    if (!plan) {
+      return { kind: 'no-plan', userId: user.id, email: user.email };
+    }
+
+    const today = args?.today ?? new Date().toISOString().slice(0, 10);
+    const summary = await loadDailySummary(supabase, user.id, today);
+    const summaryBlob = (summary?.summary ?? {}) as Record<string, unknown>;
+    const planName = await loadPlanName(supabase, user.id);
+
+    return {
+      kind: 'ready',
+      userId: user.id,
+      email: user.email,
+      planName,
+      goal: plan.goal ?? null,
+      raceDate: plan.raceDate ?? null,
+      latestMessage: summary?.training_recommendation ?? null,
+      recommendations: (summaryBlob.coachRecommendations as string[] | undefined) ?? [],
+      cautions: (summaryBlob.coachCautions as string[] | undefined) ?? [],
+      rationale: (summaryBlob.coachRationale as string | undefined) ?? null,
+      conversation: (summaryBlob.coachConversation as CoachConversationMessage[] | undefined) ?? [],
+      followUp: (summaryBlob.coachFollowUp as CoachFollowUp | null | undefined) ?? null,
+    };
+  } catch (err) {
+    // Bad Supabase env / DB error / etc — surface as 'unauthenticated' so
+    // the page shows the sign-in CTA instead of crashing the render.
+    console.error('loadCoachPageState failed:', err instanceof Error ? err.message : err);
     return { kind: 'unauthenticated' };
   }
-
-  const supabase = createServerSupabaseClient();
-  const plan = await loadActiveTrainingPlan(supabase, user.id);
-  if (!plan) {
-    return { kind: 'no-plan', userId: user.id, email: user.email };
-  }
-
-  const today = args?.today ?? new Date().toISOString().slice(0, 10);
-  const summary = await loadDailySummary(supabase, user.id, today);
-  const summaryBlob = (summary?.summary ?? {}) as Record<string, unknown>;
-  const planName = await loadPlanName(supabase, user.id);
-
-  return {
-    kind: 'ready',
-    userId: user.id,
-    email: user.email,
-    planName,
-    goal: plan.goal ?? null,
-    raceDate: plan.raceDate ?? null,
-    latestMessage: summary?.training_recommendation ?? null,
-    recommendations: (summaryBlob.coachRecommendations as string[] | undefined) ?? [],
-    cautions: (summaryBlob.coachCautions as string[] | undefined) ?? [],
-    rationale: (summaryBlob.coachRationale as string | undefined) ?? null,
-    conversation: (summaryBlob.coachConversation as CoachConversationMessage[] | undefined) ?? [],
-    followUp: (summaryBlob.coachFollowUp as CoachFollowUp | null | undefined) ?? null,
-  };
 }
 
 // Type guard helpers for cleaner page rendering.

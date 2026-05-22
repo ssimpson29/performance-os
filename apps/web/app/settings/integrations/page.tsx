@@ -2,10 +2,12 @@ import { PageHero } from '@/components/layout/page-hero';
 import { Card } from '@/components/ui/card';
 import { OuraUserBindingCard } from '@/components/integrations/oura-user-binding-card';
 import { SignInCard } from '@/components/integrations/sign-in-card';
+import { StravaCard, type StravaIntegrationState } from '@/components/integrations/strava-card';
 import { buildAppleHealthPushUrl } from '@/lib/apple-health/automation';
 import { getSupabaseEnv, hasSupabaseEnv, hasSupabaseServiceRoleEnv } from '@/lib/env';
 import { getAuthenticatedUser } from '@/lib/server-auth';
 import { integrations } from '@/lib/site';
+import { createServerSupabaseClient } from '@/lib/supabase-server';
 
 /**
  * Resolve the athlete from the real auth cookie (lib/server-auth), not from
@@ -21,6 +23,35 @@ async function resolveCurrentUser(): Promise<{ id: string; email: string } | nul
   return { id: user.id, email: user.email ?? '' };
 }
 
+/**
+ * Resolve the athlete's Strava integration row, if any. Returns
+ * `{ connected: false }` when no row exists OR when the lookup fails (we
+ * don't want a transient DB error to blow up the settings page). When a row
+ * exists we surface the last-sync timestamp + status + external athlete id.
+ */
+async function resolveStravaState(userId: string | null): Promise<StravaIntegrationState> {
+  if (!userId) return { connected: false };
+  try {
+    const supabase = createServerSupabaseClient();
+    const { data, error } = await supabase
+      .from('user_integrations')
+      .select('status, last_synced_at, external_user_id')
+      .eq('user_id', userId)
+      .eq('provider', 'strava')
+      .limit(1)
+      .maybeSingle();
+    if (error || !data) return { connected: false };
+    return {
+      connected: true,
+      status: (data as { status?: string | null }).status ?? null,
+      lastSyncedAt: (data as { last_synced_at?: string | null }).last_synced_at ?? null,
+      externalUserId: (data as { external_user_id?: string | null }).external_user_id ?? null,
+    };
+  } catch {
+    return { connected: false };
+  }
+}
+
 export default async function IntegrationsPage() {
   const supabaseReady = hasSupabaseEnv();
   const supabaseServerReady = hasSupabaseServiceRoleEnv();
@@ -28,6 +59,7 @@ export default async function IntegrationsPage() {
   const projectHost = supabaseUrl ? new URL(supabaseUrl).host : null;
   const currentUser = await resolveCurrentUser();
   const appleHealthPushUrl = currentUser ? buildAppleHealthPushUrl(currentUser.id) : null;
+  const stravaState = await resolveStravaState(currentUser?.id ?? null);
 
   return (
     <main>
@@ -83,6 +115,19 @@ export default async function IntegrationsPage() {
               </p>
             </div>
             <OuraUserBindingCard currentUser={currentUser} />
+          </Card>
+        ) : null}
+
+        {currentUser ? (
+          <Card className="space-y-4">
+            <div>
+              <p className="eyebrow">Strava setup</p>
+              <h2 className="mt-2 text-xl font-semibold text-white">Connect Strava to capture descriptions and trail context.</h2>
+              <p className="mt-2 text-sm leading-6 text-muted">
+                Apple Watch keeps owning HR / distance / duration. Strava brings the written notes and trail context, deduplicated automatically so the same session never gets double-counted.
+              </p>
+            </div>
+            <StravaCard state={stravaState} />
           </Card>
         ) : null}
 
