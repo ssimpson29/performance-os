@@ -8,6 +8,7 @@ type SyncResult = {
   workoutsInserted?: number;
   workoutsLinkedToApple?: number;
   workoutsAlreadyPresent?: number;
+  workoutsFailed?: number;
 };
 
 /**
@@ -39,9 +40,12 @@ export function SyncStravaButton() {
         return;
       }
       setStatus('done');
+      const failedSegment = data?.workoutsFailed && data.workoutsFailed > 0
+        ? ` · failed ${data.workoutsFailed}`
+        : '';
       const summary =
         data && typeof data === 'object'
-          ? `Fetched ${data.activitiesFetched ?? 0} · new ${data.workoutsInserted ?? 0} · linked to Apple ${data.workoutsLinkedToApple ?? 0} · already present ${data.workoutsAlreadyPresent ?? 0}`
+          ? `Fetched ${data.activitiesFetched ?? 0} · new ${data.workoutsInserted ?? 0} · linked to Apple ${data.workoutsLinkedToApple ?? 0} · already present ${data.workoutsAlreadyPresent ?? 0}${failedSegment}`
           : 'Sync complete.';
       setMessage(summary);
     } catch (err) {

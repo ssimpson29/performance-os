@@ -82,6 +82,8 @@ export type StravaSyncResult = {
   workoutsInserted: number;
   workoutsLinkedToApple: number;
   workoutsAlreadyPresent: number;
+  /** Number of activities that failed to insert (DB errors logged to console). Surface this so failures aren't hidden. */
+  workoutsFailed: number;
   tokenRefreshed: boolean;
 };
 
@@ -255,15 +257,27 @@ function activityToCandidate(activity: StravaActivity): WorkoutLike & {
   const localDate = (activity.start_date_local ?? startedAt).slice(0, 10);
   const duration = activity.moving_time ?? activity.elapsed_time ?? null;
   const endedAt = duration && activity.start_date ? new Date(new Date(activity.start_date).getTime() + duration * 1000).toISOString() : null;
+  // Strava returns average_heartrate / max_heartrate as floats (e.g. 141.4).
+  // The DB columns are integers, so Postgres rejected the raw floats with
+  // 22P02 "invalid input syntax for type integer" — every run with HR data
+  // silently failed to insert. Round here at the boundary.
+  const avgHr = typeof activity.average_heartrate === 'number' ? Math.round(activity.average_heartrate) : null;
+  const maxHr = typeof activity.max_heartrate === 'number' ? Math.round(activity.max_heartrate) : null;
+  // Treat empty-string description from Strava as null so the DB has a
+  // consistent "no description" sentinel.
+  const description =
+    typeof activity.description === 'string' && activity.description.length > 0
+      ? activity.description
+      : null;
   return {
     externalId: String(activity.id),
     workoutType: activity.sport_type ?? activity.type ?? 'Workout',
     startedAt,
     durationSeconds: duration,
-    description: activity.description ?? null,
+    description,
     distanceMeters: activity.distance ?? null,
-    avgHr: activity.average_heartrate ?? null,
-    maxHr: activity.max_heartrate ?? null,
+    avgHr,
+    maxHr,
     elevationGainM: activity.total_elevation_gain ?? null,
     energyKcal: activity.kilojoules != null ? Math.round(activity.kilojoules) : null,
     localDate,
@@ -501,6 +515,7 @@ export async function syncStravaActivities(
   let inserted = 0;
   let linked = 0;
   let alreadyPresent = 0;
+  let failed = 0;
 
   for (const activity of activities) {
     const result = await processStravaActivity(supabase, {
@@ -511,7 +526,7 @@ export async function syncStravaActivities(
     if (result === 'inserted') inserted += 1;
     else if (result === 'linked') linked += 1;
     else if (result === 'alreadyPresent') alreadyPresent += 1;
-    // 'failed' rows were already logged in processStravaActivity; keep going.
+    else if (result === 'failed') failed += 1;
   }
 
   // Update last_synced_at.
@@ -544,6 +559,7 @@ export async function syncStravaActivities(
     workoutsInserted: inserted,
     workoutsLinkedToApple: linked,
     workoutsAlreadyPresent: alreadyPresent,
+    workoutsFailed: failed,
     tokenRefreshed,
   };
 }
