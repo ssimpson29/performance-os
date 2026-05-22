@@ -44,6 +44,7 @@ describe('Plan page plan-vs-actual UI', () => {
             partial: 0,
             substituted: 0,
             missed: 0,
+            upcoming: 0,
             offPlan: 0,
           },
         },

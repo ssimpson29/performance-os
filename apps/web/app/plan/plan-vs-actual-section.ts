@@ -9,6 +9,7 @@ const STATUS_STYLES = {
   partial: 'border-amber-400/20 bg-amber-400/10 text-amber-100',
   substituted: 'border-sky-400/20 bg-sky-400/10 text-sky-100',
   missed: 'border-white/10 bg-white/5 text-slate-200',
+  upcoming: 'border-indigo-400/20 bg-indigo-400/10 text-indigo-100',
 } as const;
 
 function formatStatusLabel(status: PlanVsActualPreview['sessions'][number]['status']) {
@@ -21,7 +22,20 @@ function formatStatusLabel(status: PlanVsActualPreview['sessions'][number]['stat
       return 'Substituted';
     case 'missed':
       return 'Missed';
+    case 'upcoming':
+      return 'Upcoming';
   }
+}
+
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function isoDateAddDays(iso: string, deltaDays: number): string {
+  const parts = iso.slice(0, 10).split('-').map((p) => Number.parseInt(p, 10));
+  const d = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+  d.setUTCDate(d.getUTCDate() + deltaDays);
+  return d.toISOString().slice(0, 10);
 }
 
 function statCard(label: string, value: number) {
@@ -103,6 +117,18 @@ function offPlanCard(workout: PlanVsActualPreview['offPlanWorkouts'][number]) {
 export function PlanVsActualSection({ preview }: { preview: PlanVsActualPreview }) {
   const hasAnyRecordedData = preview.sessions.length > 0 || preview.offPlanWorkouts.length > 0;
 
+  // Limit the rendered cards to a rolling window so a full-season plan (160+
+  // sessions) doesn't drown the page. Past 14 days through next 7 days
+  // covers "what just happened" + "what's coming up." Summary counts above
+  // still reflect the entire plan.
+  const today = todayIsoDate();
+  const renderFrom = isoDateAddDays(today, -14);
+  const renderTo = isoDateAddDays(today, 7);
+  const renderedSessions = preview.sessions.filter(
+    (session) => session.sessionDate >= renderFrom && session.sessionDate <= renderTo,
+  );
+  const hiddenSessionCount = preview.sessions.length - renderedSessions.length;
+
   return React.createElement(
     'section',
     { className: 'shell grid gap-6 pb-8 lg:grid-cols-[1.65fr_1fr]' },
@@ -134,10 +160,25 @@ export function PlanVsActualSection({ preview }: { preview: PlanVsActualPreview 
           statCard('Partial', preview.summary.partial),
           statCard('Substituted', preview.summary.substituted),
           statCard('Missed', preview.summary.missed),
+          statCard('Upcoming', preview.summary.upcoming),
         ),
       ),
       hasAnyRecordedData
-        ? React.createElement('div', { className: 'space-y-3' }, ...preview.sessions.map(sessionCard))
+        ? React.createElement(
+            'div',
+            { className: 'space-y-3' },
+            ...renderedSessions.map(sessionCard),
+            hiddenSessionCount > 0
+              ? React.createElement(
+                  'p',
+                  {
+                    key: 'hidden-count',
+                    className: 'text-xs text-muted',
+                  },
+                  `${hiddenSessionCount} additional planned session${hiddenSessionCount === 1 ? '' : 's'} outside the past 14 / next 7 day window are summarized in the totals above.`,
+                )
+              : null,
+          )
         : React.createElement(
             'div',
             { className: 'rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-5 text-sm text-muted' },

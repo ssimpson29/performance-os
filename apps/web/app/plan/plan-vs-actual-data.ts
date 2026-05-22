@@ -1,5 +1,6 @@
 import { hasSupabaseServiceRoleEnv } from '@/lib/env';
 import { planVsActualPlannedSessions, planVsActualWorkouts } from '@/lib/sample-data';
+import { getAuthenticatedUserId } from '@/lib/server-auth';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { matchPlannedSessionsToWorkouts, normalizeActualWorkoutPayload } from '@/lib/training-plan/workout-ingestion';
 import type { PlanWorkoutMatch } from '@/lib/training-plan/types';
@@ -9,7 +10,12 @@ export type PlanVsActualSessionPreview = {
   sessionDate: string;
   title: string;
   plannedDurationMinutes?: number | null;
-  status: 'completed' | 'partial' | 'substituted' | 'missed';
+  /**
+   * 'upcoming' = session date is in the future, no match expected yet.
+   * 'missed' = past session with no matched workout.
+   * Other values come from the matcher when a workout is linked.
+   */
+  status: 'completed' | 'partial' | 'substituted' | 'missed' | 'upcoming';
   reasoning: string;
   actualWorkoutType?: string;
   actualDurationMinutes?: number;
@@ -31,7 +37,10 @@ export type PlanVsActualPreview = {
     completed: number;
     partial: number;
     substituted: number;
+    /** Past sessions with no matched workout. Excludes 'upcoming'. */
     missed: number;
+    /** Future sessions; not yet a candidate for matching. */
+    upcoming: number;
     offPlan: number;
   };
 };
@@ -62,9 +71,14 @@ function emptyPreview(dataSource: PlanVsActualPreview['dataSource'], planName: s
       partial: 0,
       substituted: 0,
       missed: 0,
+      upcoming: 0,
       offPlan: 0,
     },
   };
+}
+
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 export function buildPlanVsActualPreviewFromRecords(input: {
@@ -73,7 +87,10 @@ export function buildPlanVsActualPreviewFromRecords(input: {
   matches: PlanWorkoutMatch[];
   workouts: PersistedWorkoutRecord[];
   dataSource?: PlanVsActualPreview['dataSource'];
+  /** Override "today" for tests / deterministic snapshots. Defaults to current UTC date. */
+  today?: string;
 }): PlanVsActualPreview {
+  const today = input.today ?? todayIsoDate();
   const workoutLookup = new Map(input.workouts.map((workout) => [workout.id, workout]));
   const matchedWorkoutIds = new Set(input.matches.flatMap((match) => (match.workoutId ? [match.workoutId] : [])));
   const matchLookup = new Map(input.matches.map((match) => [match.plannedSessionId, match]));
@@ -83,13 +100,27 @@ export function buildPlanVsActualPreviewFromRecords(input: {
       const match = matchLookup.get(plannedSession.id);
       const workout = match?.workoutId ? workoutLookup.get(match.workoutId) : undefined;
 
+      // Future sessions can't be "missed" — the athlete hasn't reached them
+      // yet. Tag them 'upcoming' so the UI can distinguish "didn't do" from
+      // "haven't done yet". A matched session keeps its matcher-supplied
+      // status regardless of date (occasionally the matcher links a workout
+      // logged a day early).
+      const isFuture = plannedSession.sessionDate > today;
+      const status: PlanVsActualSessionPreview['status'] =
+        match?.status ?? (isFuture ? 'upcoming' : 'missed');
+      const reasoning =
+        match?.reasoning ??
+        (isFuture
+          ? 'Scheduled for the future; not yet eligible for matching.'
+          : 'No matched workout has been logged for this planned session yet.');
+
       return {
         plannedSessionId: plannedSession.id,
         sessionDate: plannedSession.sessionDate,
         title: plannedSession.title,
         plannedDurationMinutes: plannedSession.durationMinutes,
-        status: match?.status ?? 'missed',
-        reasoning: match?.reasoning ?? 'No matched workout has been logged for this planned session yet.',
+        status,
+        reasoning,
         actualWorkoutType: workout?.workoutType,
         actualDurationMinutes: workout?.durationSeconds ? Math.round(workout.durationSeconds / 60) : undefined,
       } satisfies PlanVsActualSessionPreview;
@@ -115,6 +146,7 @@ export function buildPlanVsActualPreviewFromRecords(input: {
       partial: sessions.filter((session) => session.status === 'partial').length,
       substituted: sessions.filter((session) => session.status === 'substituted').length,
       missed: sessions.filter((session) => session.status === 'missed').length,
+      upcoming: sessions.filter((session) => session.status === 'upcoming').length,
       offPlan: offPlanWorkouts.length,
     },
   };
@@ -175,10 +207,19 @@ export async function loadPlanVsActualPreview(): Promise<PlanVsActualPreview> {
     return emptyPreview('unconfigured');
   }
 
+  // Auth-scoped: the plan-vs-actual view must only ever show the
+  // currently-signed-in athlete's plan. The earlier 'latest plan globally'
+  // shortcut was exactly CLAUDE.md pitfall #6.
+  const userId = await getAuthenticatedUserId();
+  if (!userId) {
+    return emptyPreview('live');
+  }
+
   const supabase = createServerSupabaseClient();
   const { data: latestPlan, error: latestPlanError } = await supabase
     .from('training_plans')
     .select('id, name, user_id')
+    .eq('user_id', userId)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();

@@ -210,7 +210,7 @@ export type AdaptiveCoachResult = {
   planAdaptation?: PlanAdaptation;
 };
 
-export type WorkoutSource = 'apple_health' | 'apple_watch' | 'manual' | 'training_plan';
+export type WorkoutSource = 'apple_health' | 'apple_watch' | 'manual' | 'training_plan' | 'strava';
 
 export type ActualWorkoutInput = {
   externalId?: string;

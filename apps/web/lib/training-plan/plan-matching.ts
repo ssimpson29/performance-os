@@ -25,7 +25,11 @@ function classifySession(text: string): string {
     return 'recovery';
   }
 
-  if (/(strength|lift|mobility|gym)/.test(normalized)) {
+  // Strava reports 'WeightTraining' (no space) for gym sessions; Apple
+  // Health reports 'Strength Training'. Match both vocabularies so a Friday
+  // strength workout from either source links to the planned strength
+  // session.
+  if (/(strength|lift|mobility|gym|weight ?training|weights)/.test(normalized)) {
     return 'strength';
   }
 

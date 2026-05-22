@@ -107,4 +107,40 @@ describe('matchPlannedSessionsToWorkouts', () => {
     ]);
     expect(summary.unmatchedWorkoutIds).toEqual([]);
   });
+
+  it('links a Strava "WeightTraining" workout to a planned strength session', () => {
+    // Strava reports weights as 'WeightTraining' (no space); Apple Health
+    // reports 'Strength Training'. Both should resolve to the same family.
+    const planned: PlannedSessionForMatching[] = [
+      {
+        id: 'planned-strength',
+        sessionDate: '2026-05-22',
+        title: 'Strength Day A',
+        discipline: 'Strength',
+        durationMinutes: 45,
+        objective: 'Posterior chain focus',
+      },
+    ];
+    const actuals: ActualWorkoutForMatching[] = [
+      {
+        id: 'strava-weights',
+        externalId: 'strava-1',
+        source: 'strava',
+        workoutType: 'WeightTraining',
+        startedAt: '2026-05-22T13:00:00.000Z',
+        localDate: '2026-05-22',
+        durationSeconds: 2040, // 34 min — matches your real Strava activity
+      },
+    ];
+
+    const summary = matchPlannedSessionsToWorkouts(planned, actuals);
+    expect(summary.matches).toEqual([
+      expect.objectContaining({
+        plannedSessionId: 'planned-strength',
+        workoutId: 'strava-weights',
+        status: 'completed',
+      }),
+    ]);
+    expect(summary.unmatchedWorkoutIds).toEqual([]);
+  });
 });

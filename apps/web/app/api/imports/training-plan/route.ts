@@ -78,9 +78,13 @@ export async function POST(request: Request) {
 
     const adaptivePreview = adaptWeeklyStructure(coachInput);
 
+    // Always persist a non-null start_date so the race-aware adaptive engine
+    // can compute phase position. The expansion above already fell back to
+    // `today` when the form didn't carry one — use the same value here so
+    // the persisted plan row and the expanded sessions agree on week 1.
     const persisted = await persistImportedTrainingPlan(supabase, parsed, {
       userId,
-      startDate: startDate || undefined,
+      startDate: effectiveStartDate,
       endDate: raceContext?.raceDate,
       goal: raceContext?.goal,
       raceContext,
