@@ -635,12 +635,20 @@ export async function syncStravaActivities(
       .eq('id', row.id);
   }
 
-  // Determine the "after" timestamp: caller override, last_synced_at, or 30 days ago.
+  // Determine the "after" timestamp. Caller override wins; otherwise we use
+  // the older of `last_synced_at` and "30 days ago" so a recent `last_synced_at`
+  // can never prevent a refill of the last 30 days. This guards against a
+  // scenario where workouts rows got deleted (or never got inserted) after a
+  // prior sync — the cursor alone would return an empty fetch and leave the
+  // table empty. Strava's rate limits are loose enough (200 req / 15 min)
+  // that re-fetching ~5–30 activities per click is fine. The
+  // `(source, external_id)` unique key + `alreadyPresent` short-circuit
+  // makes the work idempotent.
   const fallbackAfter = Math.floor((now - 30 * 24 * 60 * 60 * 1000) / 1000);
   const afterUnix = options.afterDate
     ? Math.floor(new Date(options.afterDate).getTime() / 1000)
     : row.last_synced_at
-      ? Math.floor(new Date(row.last_synced_at).getTime() / 1000)
+      ? Math.min(Math.floor(new Date(row.last_synced_at).getTime() / 1000), fallbackAfter)
       : fallbackAfter;
 
   // 1. Get the summary list (cheap — single API call).
