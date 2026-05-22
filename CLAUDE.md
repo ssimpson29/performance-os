@@ -156,10 +156,18 @@ npm run test --workspace @performance-os/web   # vitest run
 
 ### Coach architecture (3 layers — keep separate)
 
-**Training Coach** (daily, race-driven):
-1. **Deterministic engine** — `apps/web/lib/training-plan/adaptive-coach.ts` (pure, heavily tested)
-2. **Athlete-scoped data loader** — `apps/web/app/plan/coach-data.ts`
-3. **Interactive coach service** — `apps/web/lib/agents/training-coach.ts` + `apps/web/app/coach/coach-data.ts` (server) + `apps/web/app/coach/coach-chat.tsx` (client)
+**Training Coach** (daily, race-driven, LLM-agent with tools):
+1. **Deterministic engine** — `apps/web/lib/training-plan/adaptive-coach.ts` (pure, heavily tested). Surfaced to the agent via the `runAdaptiveEngine` tool.
+2. **Athlete-scoped context loader** — `apps/web/lib/agents/athlete-context.ts` (`loadAthleteContext`). Pulls workouts + plan-or-null + injury history + biomarkers + recovery + longevity + recent conversation. NEVER throws on no-plan — `currentPlan: null` is a normal state the agent handles via the plan-building branch. (The older `loadAdaptiveCoachContext` in `apps/web/app/plan/coach-data.ts` is still used by the training-plan import flow but not by the coach route.)
+3. **LLM agent service** — `apps/web/lib/agents/training-coach.ts` (multi-turn tool-calling loop) + `apps/web/lib/agents/coach-tools.ts` (tool definitions + handlers) + `apps/web/lib/agents/plan-generator.ts` (`proposeRacePlan` / `commitProposedPlan`) + `apps/web/app/coach/coach-chat.tsx` (client).
+
+**Agent tool registry** (see `coach-tools.ts`):
+- READ: `getRecentWorkouts`, `getInjuryHistory`, `getRecentBiomarkers`, `getCurrentPlan`, `runAdaptiveEngine`
+- WRITE: `proposeRacePlan` (drafts a plan, returns a proposalId), `commitTrainingPlan` (persists a previously-proposed plan after explicit athlete approval)
+
+The system prompt gives the LLM agency rather than restricting it to "translate engine output." The deterministic engine is one input among many. Conversational plan creation works end-to-end: athlete mentions a race → agent calls `proposeRacePlan` → presents summary → athlete approves → agent calls `commitTrainingPlan` → plan lands in `training_plans` + `planned_sessions` via the same persistence path as workbook imports.
+
+**OpenAI LLM parameters.** All three agent call sites (training-coach, longevity-guru, biomarker image-extraction) use `temperature: 1` and `max_completion_tokens: 2000`. Reasoning-class models (o1, o3, gpt-5, gpt-5.5) reject `max_tokens` (must be `max_completion_tokens`) and reject temperatures other than 1. The values also work for legacy gpt-4o-class models.
 
 **Longevity Guru** (strategic, healthspan-driven):
 1. **Deterministic engine** — `apps/web/lib/longevity/{reference-ranges,trend-detection,prioritization}.ts`

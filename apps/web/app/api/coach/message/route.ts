@@ -1,13 +1,27 @@
 import { NextResponse } from 'next/server';
 
-import { loadActiveTrainingPlan, loadAdaptiveCoachContext } from '@/app/plan/coach-data';
-import { checkRateLimit } from '@/lib/rate-limit';
+import { loadAthleteContext } from '@/lib/agents/athlete-context';
 import { runTrainingCoach } from '@/lib/agents/training-coach';
-import { loadTrainingCoachState, persistTrainingCoachRun } from '@/lib/agents/training-coach-persistence';
+import { persistTrainingCoachRun } from '@/lib/agents/training-coach-persistence';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { getAuthenticatedUserId } from '@/lib/server-auth';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
-import { adaptWeeklyStructure } from '@/lib/training-plan/adaptive-coach';
 
+/**
+ * POST /api/coach/message
+ *
+ * Auth-scoped LLM-agent coach endpoint. The agent loads the athlete's full
+ * context (workouts, plan-or-null, injury history, biomarkers, recovery,
+ * follow-up state, recent conversation), then runs a tool-calling agent
+ * loop that can:
+ *   - inspect any slice of the context,
+ *   - run the deterministic adaptive engine when a plan exists,
+ *   - propose and commit a new training plan when the athlete doesn't have
+ *     one and mentions a race.
+ *
+ * Unlike the previous route, this does NOT throw when the athlete has no
+ * plan — the no-plan branch is part of normal agent behavior.
+ */
 export async function POST(request: Request) {
   const userId = await getAuthenticatedUserId();
   if (!userId) {
@@ -28,40 +42,20 @@ export async function POST(request: Request) {
   const supabase = createServerSupabaseClient();
   const today = new Date().toISOString().slice(0, 10);
 
-  let coachInput;
+  let athleteContext;
   try {
-    coachInput = await loadAdaptiveCoachContext(supabase, userId, { today });
+    athleteContext = await loadAthleteContext(supabase, userId, { today });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to load coach context';
-    return NextResponse.json({ error: message }, { status: 400 });
+    const message = error instanceof Error ? error.message : 'Failed to load athlete context';
+    console.error('[coach/message] loadAthleteContext threw:', error);
+    return NextResponse.json({ error: message }, { status: 500 });
   }
-
-  const adaptive = adaptWeeklyStructure(coachInput);
-  const state = await loadTrainingCoachState(supabase, { userId, today });
-
-  // Load supportTemplates separately so the LLM can reference 'Lift A',
-  // 'Speed Warmup' etc. by their actual exercises rather than waving at the
-  // workbook. (Cheap second query for a single-user app; can be folded into
-  // loadAdaptiveCoachContext later if it shows up in latency.)
-  const activePlan = await loadActiveTrainingPlan(supabase, userId);
-
-  // Resolve this week's phase target so the LLM can quote it verbatim
-  // when the athlete asks 'what should I be hitting this week?'.
-  const phasePos = adaptive.phasePosition;
-  const weekTarget =
-    activePlan && phasePos && phasePos.phaseIndex >= 0
-      ? activePlan.phaseBlocks[phasePos.phaseIndex]?.weeks[phasePos.weekIndexInPhase] ?? null
-      : null;
 
   const output = await runTrainingCoach({
     today,
     athleteMessage,
-    adaptive,
-    conversation: state.conversation,
-    followUp: state.followUp,
-    supportTemplates: activePlan?.supportTemplates,
-    recentWorkouts: coachInput.completedWorkouts,
-    weekTarget,
+    athleteContext,
+    supabase,
   });
 
   const persisted = await persistTrainingCoachRun(supabase, { userId, today, output });
@@ -75,6 +69,10 @@ export async function POST(request: Request) {
     injurySignal: output.injurySignal,
     recoverySignal: output.recoverySignal,
     llmInvoked: output.llmInvoked,
+    /** Tool-call trace (debugging aid). UI can ignore. */
+    toolTrace: output.toolTrace,
+    /** True when the agent committed a new plan during this turn. */
+    planCommitted: output.planCommitted,
     persisted,
   });
 }
