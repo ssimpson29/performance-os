@@ -107,11 +107,20 @@ describe('server-auth primitives', () => {
     expect(options.cookies.getAll()).toEqual([{ name: 'sb-token', value: 'irrelevant-for-mocking' }]);
   });
 
-  it('throws when Supabase env vars are missing (deployment misconfig)', async () => {
+  it('returns null when Supabase env vars are missing (deployment misconfig — logged, not thrown)', async () => {
     delete process.env.NEXT_PUBLIC_SUPABASE_URL;
     delete process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const { getAuthenticatedUser } = await import('../lib/server-auth');
-    await expect(getAuthenticatedUser()).rejects.toThrow(/Supabase environment variables/);
+    // Hardening contract: rather than crash the page, getAuthenticatedUser
+    // soft-fails to null and logs the underlying error. Page-level callers
+    // treat that as 'unauthenticated' and render the sign-in CTA.
+    await expect(getAuthenticatedUser()).resolves.toBeNull();
+    expect(consoleSpy).toHaveBeenCalled();
+    const loggedMessages = consoleSpy.mock.calls.flat().map((arg) => String(arg));
+    expect(loggedMessages.some((m) => /Supabase environment variables/.test(m))).toBe(true);
+
+    consoleSpy.mockRestore();
   });
 });
