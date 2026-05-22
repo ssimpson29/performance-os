@@ -37,7 +37,7 @@ type IntegrationRow = {
   metadata: Record<string, unknown> | null;
 };
 
-type WorkoutRow = {
+export type WorkoutRow = {
   id: string;
   source: string;
   external_id: string;
@@ -48,7 +48,7 @@ type WorkoutRow = {
   superseded_by: string | null;
 };
 
-type StravaActivity = {
+export type StravaActivity = {
   id: number | string;
   name?: string;
   description?: string | null;
@@ -64,6 +64,8 @@ type StravaActivity = {
   total_elevation_gain?: number;
   kilojoules?: number;
 };
+
+export type ProcessActivityResult = 'inserted' | 'linked' | 'alreadyPresent' | 'failed';
 
 export type SyncStravaOptions = {
   /** ISO date; defaults to 30 days ago. */
@@ -81,6 +83,98 @@ export type StravaSyncResult = {
   workoutsAlreadyPresent: number;
   tokenRefreshed: boolean;
 };
+
+/**
+ * Process a single normalized Strava activity against a pre-loaded slice of
+ * the athlete's `workouts` rows. Pure orchestration over the matcher; does
+ * the insert and any link/description-forward work in one place so both the
+ * batch sync (Phase 2) and the webhook handler (Phase 4) share the same
+ * implementation of "what to do when a Strava activity arrives."
+ *
+ * Returns:
+ *   - 'alreadyPresent' if a Strava row with the same external_id is already in `existing`.
+ *   - 'linked' if the activity matched an Apple-sourced workout (the new Strava
+ *     row sets `superseded_by` to that Apple row).
+ *   - 'inserted' if no canonical match existed; the activity becomes a new
+ *     standalone Strava workout row.
+ *   - 'failed' if the insert raised; the caller can decide whether to bail
+ *     or continue across a batch.
+ */
+export async function processStravaActivity(
+  supabase: SupabaseClient,
+  args: {
+    userId: string;
+    activity: StravaActivity;
+    existing: WorkoutRow[];
+  },
+): Promise<ProcessActivityResult> {
+  const { userId, activity, existing } = args;
+  const candidate = activityToCandidate(activity);
+
+  // Already-seen Strava activity? Idempotent no-op.
+  const sameSource = existing.find(
+    (w) => w.source === 'strava' && w.external_id === candidate.externalId,
+  );
+  if (sameSource) {
+    return 'alreadyPresent';
+  }
+
+  // Search for an Apple-sourced match.
+  const matcherInput = existing.map((w) => ({
+    id: w.id,
+    source: w.source,
+    startedAt: w.started_at,
+    durationSeconds: w.duration_seconds,
+    workoutType: w.workout_type,
+  }));
+  const matched = findExistingMatch(candidate, matcherInput);
+  const matchedAppleRow =
+    matched && (matched.source === 'apple_health' || matched.source === 'apple_watch')
+      ? existing.find((w) => w.id === matched.id) ?? null
+      : null;
+  const supersededBy = matchedAppleRow ? matchedAppleRow.id : null;
+
+  const { error: insertError } = await supabase.from('workouts').insert({
+    user_id: userId,
+    source: 'strava',
+    external_id: candidate.externalId,
+    workout_type: candidate.workoutType,
+    started_at: candidate.startedAt,
+    ended_at: candidate.endedAt,
+    local_date: candidate.localDate,
+    duration_seconds: candidate.durationSeconds ?? null,
+    distance_meters: candidate.distanceMeters,
+    energy_kcal: candidate.energyKcal,
+    avg_heart_rate: candidate.avgHr,
+    max_heart_rate: candidate.maxHr,
+    description: candidate.description,
+    superseded_by: supersededBy,
+    metadata: {
+      strava: {
+        activityId: candidate.externalId,
+        name: activity.name ?? null,
+        elevationGainM: candidate.elevationGainM,
+      },
+    },
+  });
+  if (insertError) {
+    console.error('strava sync: failed to insert workout', insertError);
+    return 'failed';
+  }
+
+  if (supersededBy) {
+    // If the Apple row had no description but the Strava activity does,
+    // forward it onto the canonical Apple row.
+    if (matchedAppleRow && !matchedAppleRow.description && candidate.description) {
+      await supabase
+        .from('workouts')
+        .update({ description: candidate.description })
+        .eq('id', matchedAppleRow.id);
+    }
+    return 'linked';
+  }
+  return 'inserted';
+}
 
 async function refreshStravaToken(
   clientId: string,
@@ -106,6 +200,18 @@ async function refreshStravaToken(
     throw new StravaSyncError('Strava token refresh response missing fields', 502);
   }
   return { access_token: data.access_token, refresh_token: data.refresh_token, expires_at: data.expires_at };
+}
+
+async function fetchActivityById(accessToken: string, activityId: string | number): Promise<StravaActivity | null> {
+  const res = await fetch(`https://www.strava.com/api/v3/activities/${encodeURIComponent(String(activityId))}`, {
+    headers: { authorization: `Bearer ${accessToken}` },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new StravaSyncError(`Strava activity fetch failed (${res.status}): ${text.slice(0, 200)}`, 502);
+  }
+  return (await res.json()) as StravaActivity;
 }
 
 async function fetchActivities(accessToken: string, afterUnix: number): Promise<StravaActivity[]> {
@@ -152,6 +258,109 @@ function activityToCandidate(activity: StravaActivity): WorkoutLike & {
     endedAt,
     source: 'strava',
   };
+}
+
+/**
+ * Resolve which Performance OS user owns a Strava athlete id. Returns null
+ * when no integration is bound to that athlete — the webhook handler uses
+ * this to ack-and-drop events for athletes we don't recognize (e.g. if
+ * multiple tenants ever share the same Strava app registration).
+ */
+export async function loadStravaIntegrationByOwnerId(
+  supabase: SupabaseClient,
+  ownerId: string | number,
+): Promise<{ userId: string; integration: IntegrationRow } | null> {
+  const { data, error } = await supabase
+    .from('user_integrations')
+    .select('id, user_id, access_token_encrypted, refresh_token_encrypted, token_expires_at, external_user_id, last_synced_at, metadata')
+    .eq('provider', 'strava')
+    .eq('external_user_id', String(ownerId))
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new StravaSyncError(`Failed to load Strava integration: ${error.message}`, 500);
+  if (!data) return null;
+  const row = data as IntegrationRow & { user_id: string };
+  return { userId: row.user_id, integration: row };
+}
+
+/**
+ * Ensure the in-memory access token for an integration row is fresh, refreshing
+ * via the Strava OAuth refresh-token grant when within 60s of expiry. Returns
+ * the access token to use plus whether a refresh occurred (caller can include
+ * it in summaries / telemetry).
+ */
+export async function ensureFreshStravaToken(
+  supabase: SupabaseClient,
+  args: {
+    integration: IntegrationRow;
+    clientId: string;
+    clientSecret: string;
+    now?: number;
+  },
+): Promise<{ accessToken: string; tokenRefreshed: boolean }> {
+  const { integration, clientId, clientSecret } = args;
+  const now = args.now ?? Date.now();
+  if (!integration.access_token_encrypted || !integration.refresh_token_encrypted) {
+    throw new StravaSyncError('Strava integration is missing tokens; reconnect Strava.', 400);
+  }
+  const expiresAtMs = integration.token_expires_at ? new Date(integration.token_expires_at).getTime() : 0;
+  if (expiresAtMs && expiresAtMs - now >= 60_000) {
+    return { accessToken: integration.access_token_encrypted, tokenRefreshed: false };
+  }
+  const refreshed = await refreshStravaToken(clientId, clientSecret, integration.refresh_token_encrypted);
+  await supabase
+    .from('user_integrations')
+    .update({
+      access_token_encrypted: refreshed.access_token,
+      refresh_token_encrypted: refreshed.refresh_token,
+      token_expires_at: new Date(refreshed.expires_at * 1000).toISOString(),
+    })
+    .eq('id', integration.id);
+  return { accessToken: refreshed.access_token, tokenRefreshed: true };
+}
+
+/**
+ * Handle one Strava webhook activity event. Fetches the activity from
+ * Strava's API, queries the athlete's workouts in the ±5-minute window for
+ * dedup, and delegates to processStravaActivity. Returns the same enum the
+ * batch sync uses, so handlers can summarize what happened.
+ */
+export async function handleStravaActivityEvent(
+  supabase: SupabaseClient,
+  args: {
+    userId: string;
+    integration: IntegrationRow;
+    activityId: string | number;
+    clientId: string;
+    clientSecret: string;
+    now?: number;
+  },
+): Promise<ProcessActivityResult | 'notFound'> {
+  const { userId, integration, activityId, clientId, clientSecret } = args;
+  const { accessToken } = await ensureFreshStravaToken(supabase, {
+    integration,
+    clientId,
+    clientSecret,
+    now: args.now,
+  });
+  const activity = await fetchActivityById(accessToken, activityId);
+  if (!activity) return 'notFound';
+
+  const startedAtMs = activity.start_date ? new Date(activity.start_date).getTime() : Date.now();
+  const fromIso = new Date(startedAtMs - 5 * 60 * 1000).toISOString();
+  const toIso = new Date(startedAtMs + 5 * 60 * 1000).toISOString();
+  const { data: existingRows, error: exError } = await supabase
+    .from('workouts')
+    .select('id, source, external_id, workout_type, started_at, duration_seconds, description, superseded_by')
+    .eq('user_id', userId)
+    .gte('started_at', fromIso)
+    .lte('started_at', toIso);
+  if (exError) {
+    throw new StravaSyncError(`Failed to load workouts for matching: ${exError.message}`, 500);
+  }
+  const existing = (existingRows as WorkoutRow[] | null) ?? [];
+
+  return processStravaActivity(supabase, { userId, activity, existing });
 }
 
 /**
@@ -225,82 +434,21 @@ export async function syncStravaActivities(
   if (exError) throw new StravaSyncError(`Failed to load workouts for matching: ${exError.message}`, 500);
 
   const existing: WorkoutRow[] = (existingRows as WorkoutRow[] | null) ?? [];
-  // Adapt to WorkoutLike for matcher.
-  const matcherInput = existing.map((w) => ({
-    id: w.id,
-    source: w.source,
-    startedAt: w.started_at,
-    durationSeconds: w.duration_seconds,
-    workoutType: w.workout_type,
-  }));
 
   let inserted = 0;
   let linked = 0;
   let alreadyPresent = 0;
 
   for (const activity of activities) {
-    const candidate = activityToCandidate(activity);
-
-    // Already-seen Strava activity? Upsert via (source, external_id) — no link needed.
-    const sameSource = existing.find((w) => w.source === 'strava' && w.external_id === candidate.externalId);
-    if (sameSource) {
-      alreadyPresent += 1;
-      continue;
-    }
-
-    // Search for an Apple-sourced match.
-    const matched = findExistingMatch(candidate, matcherInput);
-    const matchedAppleRow =
-      matched && (matched.source === 'apple_health' || matched.source === 'apple_watch')
-        ? existing.find((w) => w.id === matched.id) ?? null
-        : null;
-
-    const supersededBy = matchedAppleRow ? matchedAppleRow.id : null;
-
-    // Insert the Strava workout row. metadata.strava captures the richer
-    // Strava-only fields for traceability.
-    const { error: insertError } = await supabase.from('workouts').insert({
-      user_id: userId,
-      source: 'strava',
-      external_id: candidate.externalId,
-      workout_type: candidate.workoutType,
-      started_at: candidate.startedAt,
-      ended_at: candidate.endedAt,
-      local_date: candidate.localDate,
-      duration_seconds: candidate.durationSeconds ?? null,
-      distance_meters: candidate.distanceMeters,
-      energy_kcal: candidate.energyKcal,
-      avg_heart_rate: candidate.avgHr,
-      max_heart_rate: candidate.maxHr,
-      description: candidate.description,
-      superseded_by: supersededBy,
-      metadata: {
-        strava: {
-          activityId: candidate.externalId,
-          name: activity.name ?? null,
-          elevationGainM: candidate.elevationGainM,
-        },
-      },
+    const result = await processStravaActivity(supabase, {
+      userId,
+      activity,
+      existing,
     });
-    if (insertError) {
-      // Surface a clear error but keep going across the rest of the activities.
-      console.error('strava sync: failed to insert workout', insertError);
-      continue;
-    }
-
-    if (supersededBy) {
-      linked += 1;
-      // If the Apple row has no description yet and the Strava activity does,
-      // forward it onto the canonical Apple row.
-      if (matchedAppleRow && !matchedAppleRow.description && candidate.description) {
-        await supabase
-          .from('workouts')
-          .update({ description: candidate.description })
-          .eq('id', matchedAppleRow.id);
-      }
-    } else {
-      inserted += 1;
-    }
+    if (result === 'inserted') inserted += 1;
+    else if (result === 'linked') linked += 1;
+    else if (result === 'alreadyPresent') alreadyPresent += 1;
+    // 'failed' rows were already logged in processStravaActivity; keep going.
   }
 
   // Update last_synced_at.

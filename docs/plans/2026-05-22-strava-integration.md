@@ -151,5 +151,103 @@ storage. Add `'strava'` if not present (check `001_extensions_and_enums.sql`).
   are the primary signal; Strava segments can be added later if
   course-specific intel becomes valuable (e.g., comparing repeats of
   the same trail).
-- Strava webhooks for real-time push. Polling sync is simpler for
-  Phase 2; webhooks can be added when latency matters.
+- Polling cron (Vercel Cron). Replaced by Phase 4 webhooks below —
+  real-time push is the better architecture for a single-athlete app
+  and shares the same dedup / matcher pipeline.
+
+---
+
+## Phase 4 — Strava webhooks (real-time push)
+
+**Goal:** Strava notifies Performance OS within ~30s of an activity being
+saved, so the coach sees today's workout without an athlete-initiated
+sync click. Polling cron is skipped — webhooks are the right shape and
+not much more code.
+
+### Architecture
+
+- **One subscription per Strava app** (not per athlete). Once
+  registered, the subscription receives `aspect_type='create'|'update'|'delete'`
+  events for every athlete who has authorized this app's OAuth.
+- Strava POSTs a tiny payload (`object_type`, `object_id`, `aspect_type`,
+  `owner_id`, ...). The handler fetches the full activity from
+  `/api/v3/activities/{object_id}` using the per-athlete access token
+  looked up via `external_user_id = owner_id`.
+- Idempotent on retries: `(source, external_id)` uniqueness on
+  `workouts` plus the `superseded_by` matcher make duplicate webhook
+  deliveries a no-op.
+- Strava expects a 200 within ~2 seconds. The handler does the work
+  inline; if latency becomes a problem we'd add a queue.
+
+### Task 4.1: Webhook verification + event endpoints
+**Files:**
+- Create: `apps/web/app/api/webhooks/strava/route.ts` (GET + POST)
+- Modify: `apps/web/lib/strava/activity-sync.ts` (extract per-activity helper)
+
+**Steps:**
+- `GET` reads `?hub.mode=subscribe&hub.verify_token=...&hub.challenge=...`,
+  verifies `hub.verify_token` matches `STRAVA_WEBHOOK_VERIFY_TOKEN`,
+  echoes `{ "hub.challenge": "<challenge>" }`. Returns 403 on mismatch.
+- `POST` reads `{ object_type, object_id, aspect_type, owner_id }`.
+  Ignores non-activity events. For `create`/`update`: looks up
+  `user_integrations` by `external_user_id`, refreshes token, fetches
+  the single activity, calls `processStravaActivity` (extracted from
+  the batch loop). For `delete`: ack 200 (no auto-delete for now).
+  Unknown `owner_id` → ack 200 (could be another tenant on this app).
+- Extract the per-activity loop body in `syncStravaActivities` into
+  `processStravaActivity(supabase, { userId, activity, existingWorkouts })`
+  returning `'inserted' | 'linked' | 'alreadyPresent' | 'failed'`. Both
+  the batch sync and the webhook handler call it.
+
+### Task 4.2: Subscription registration endpoint
+**Files:**
+- Create: `apps/web/app/api/strava/register-webhook/route.ts`
+
+**Steps:**
+- Auth-scoped (`getAuthenticatedUserId()`). This is admin tooling —
+  any signed-in athlete can register/clear the subscription for the
+  app since there's only one.
+- `GET` returns the current subscription (from
+  `GET https://www.strava.com/api/v3/push_subscriptions?client_id=&client_secret=`).
+- `POST` deletes any existing subscription first, then registers a
+  new one with `callback_url=https://<host>/api/webhooks/strava` and
+  `verify_token=<STRAVA_WEBHOOK_VERIFY_TOKEN>`. Returns the new
+  subscription id.
+
+### Task 4.3: Settings UI — Register webhook button
+**Files:**
+- Modify: `apps/web/components/integrations/strava-card.ts`
+- Create: `apps/web/components/integrations/register-strava-webhook-button.tsx`
+
+**Steps:**
+- Small "Register webhook" client wedge next to "Sync now" when
+  Strava is connected. POSTs to `/api/strava/register-webhook`.
+  Surfaces success/error inline.
+
+### Task 4.4: Tests
+**Files:**
+- Create: `apps/web/tests/strava-webhook-route.test.ts`
+- Create: `apps/web/tests/strava-register-webhook-route.test.ts`
+- Modify: `apps/web/tests/strava-activity-sync.test.ts` (verify the
+  refactored batch path still inserts/links/idempotents correctly).
+
+### Task 4.5: CLAUDE.md
+- Add `/api/strava/register-webhook` to auth-scoped routes list.
+- Add `/api/webhooks/strava` to the intentional-exception list with
+  the verify-token + owner_id mapping rationale (mirrors the Oura/Strava
+  callback exception block).
+- New env var: `STRAVA_WEBHOOK_VERIFY_TOKEN`.
+- Mark Phase 4 done in open work #4.
+
+---
+
+## Out of scope (deliberate, post-Phase-4)
+
+- Strava webhook handler graduating to a background queue if the
+  inline sync ever exceeds ~2s. For a single athlete this is unlikely.
+- Auto-delete of workouts when `aspect_type='delete'` — defer until
+  the UX implications are clearer.
+- Webhook signature verification beyond `verify_token` — Strava
+  doesn't currently sign the POST body. The verify_token guards the
+  registration handshake; the POST is implicitly trusted because the
+  `owner_id` mapping fails closed for unknown athletes.

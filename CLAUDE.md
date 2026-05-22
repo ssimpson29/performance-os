@@ -53,6 +53,13 @@ Optional LLM coach env (deterministic fallback if missing — intentional):
 - `AI_COACH_MODEL`
 - `AI_COACH_BASE_URL` (OpenAI-compatible)
 
+Strava integration env (required for the Strava OAuth + sync flow;
+webhook token is additionally required for real-time push):
+- `STRAVA_CLIENT_ID`
+- `STRAVA_CLIENT_SECRET`
+- `STRAVA_WEBHOOK_VERIFY_TOKEN` (opaque random string; reused when
+  registering the push subscription via `POST /api/strava/register-webhook`)
+
 See `.env.example` at repo root.
 
 ---
@@ -117,6 +124,8 @@ npm run test --workspace @performance-os/web   # vitest run
   - `POST /api/sync/oura`
   - `GET  /api/imports/strava/connect`
   - `POST /api/sync/strava`
+  - `GET  /api/strava/register-webhook`
+  - `POST /api/strava/register-webhook`
   - `POST /api/coach/message`
   - `POST /api/longevity/evaluate`
   - `POST /api/imports/biomarker-panel`
@@ -134,6 +143,14 @@ npm run test --workspace @performance-os/web   # vitest run
     `getAuthenticatedUserId()`. If `state` is missing the userId, the
     callback short-circuits to a "code received but unbound" response
     rather than persisting a row.
+  - `GET  /api/webhooks/strava` and `POST /api/webhooks/strava` are
+    Strava's push-subscription endpoints. The GET handshake verifies
+    `hub.verify_token` against `STRAVA_WEBHOOK_VERIFY_TOKEN`. The POST
+    carries an `owner_id` (Strava athlete id) that maps to a row in
+    `user_integrations` via `external_user_id`; unknown owners are
+    acknowledged with a 200 and dropped (fails closed). Strava cannot
+    carry a Supabase session, so this is a documented exception to
+    cookie auth.
 - Two athletes signed into the same deployment must never read or
   write each other's data through browser flows.
 
@@ -318,6 +335,26 @@ the `workouts` table.
   block the Apple sync. The coach data loader
   (`apps/web/app/plan/coach-data.ts::loadCompletedWorkouts`) now filters
   `.is('superseded_by', null)` so a duplicated session counts once.
+- **Phase 4 done (2026-05-22):** real-time push via Strava webhooks.
+  Per-activity logic extracted from the batch loop into
+  `processStravaActivity` so the webhook and the batch sync share one
+  implementation. New helpers in `lib/strava/activity-sync.ts`:
+  `loadStravaIntegrationByOwnerId`, `ensureFreshStravaToken`,
+  `handleStravaActivityEvent`. New endpoints:
+  - `GET  /api/webhooks/strava` — Strava subscription challenge.
+  - `POST /api/webhooks/strava` — receives `aspect_type='create'|'update'|'delete'`
+    events. Ignores non-activity events, ignores deletes (for now),
+    looks up the integration by `owner_id` and dispatches to
+    `handleStravaActivityEvent`.
+  - `GET  /api/strava/register-webhook` — auth-scoped; lists the
+    current subscription via the Strava API.
+  - `POST /api/strava/register-webhook` — auth-scoped; deletes any
+    existing subscription, creates a fresh one at
+    `${NEXT_PUBLIC_APP_URL}/api/webhooks/strava` with the env-stored
+    verify token. Idempotent.
+  Settings UI adds a "Register webhook" button next to "Sync now" on
+  the Strava card so the one-time registration is a click. Required
+  env: `STRAVA_WEBHOOK_VERIFY_TOKEN` (any opaque string).
 
 ### 5. Plan docs index (existing)
 - `docs/plans/2026-05-04-training-import-and-adaptive-coach.md`

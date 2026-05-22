@@ -1,5 +1,6 @@
 import * as React from 'react';
 
+import { RegisterStravaWebhookButton } from './register-strava-webhook-button';
 import { SyncStravaButton } from './sync-strava-button';
 
 export type StravaIntegrationState =
@@ -83,6 +84,7 @@ export function StravaCard({ state }: { state: StravaIntegrationState }) {
           'div',
           { key: 'panel-actions', className: 'mt-4 flex flex-wrap items-center gap-3' },
           React.createElement(SyncStravaButton, { key: 'sync-btn' }),
+          React.createElement(RegisterStravaWebhookButton, { key: 'register-webhook-btn' }),
           React.createElement(
             'a',
             {
@@ -92,6 +94,11 @@ export function StravaCard({ state }: { state: StravaIntegrationState }) {
             },
             'Reconnect',
           ),
+        ),
+        React.createElement(
+          'p',
+          { key: 'webhook-hint', className: 'mt-3 text-xs text-muted' },
+          'Register webhook once per deployment to get real-time push from Strava after each activity.',
         ),
       ),
     );

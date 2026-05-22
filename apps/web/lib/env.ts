@@ -24,6 +24,7 @@ function readStravaEnv() {
   return {
     stravaClientId: process.env.STRAVA_CLIENT_ID,
     stravaClientSecret: process.env.STRAVA_CLIENT_SECRET,
+    stravaWebhookVerifyToken: process.env.STRAVA_WEBHOOK_VERIFY_TOKEN,
   };
 }
 
@@ -125,4 +126,20 @@ export function requireStravaEnv() {
     stravaClientId,
     stravaClientSecret,
   };
+}
+
+/**
+ * Strava webhook verification token. Used both by the verification GET
+ * handler (to confirm Strava is the caller during subscription registration)
+ * and by the registration helper (sent as `verify_token` in the subscription
+ * POST). Required only when the webhook path is used.
+ */
+export function requireStravaWebhookVerifyToken() {
+  const { stravaWebhookVerifyToken } = readStravaEnv();
+  if (!stravaWebhookVerifyToken) {
+    throw new Error(
+      'Missing STRAVA_WEBHOOK_VERIFY_TOKEN. Set it to any opaque string and use the same value when registering the Strava push subscription.',
+    );
+  }
+  return stravaWebhookVerifyToken;
 }
