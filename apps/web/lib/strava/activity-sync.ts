@@ -125,6 +125,19 @@ export type StravaSyncResult = {
   /** Number of activities that failed to insert (DB errors logged to console). Surface this so failures aren't hidden. */
   workoutsFailed: number;
   tokenRefreshed: boolean;
+  /**
+   * Plan-matcher reconciliation summary. Runs after the Strava fetch over
+   * the last 30 days regardless of whether new activities were pulled, so a
+   * re-click of Sync now actually re-evaluates prior sessions. `null` when
+   * the matcher errored (logged separately to the function logs).
+   */
+  planMatching: {
+    plannedSessionCount: number;
+    workoutCount: number;
+    matchedCount: number;
+    windowFromDate: string;
+    windowToDate: string;
+  } | null;
 };
 
 /**
@@ -695,6 +708,7 @@ export async function syncStravaActivities(
   // the matcher has to look at everything the user has on file so a
   // re-click of "Sync now" actually re-evaluates existing rows. Idempotent
   // and non-fatal: failure is logged but doesn't surface to the user.
+  let planMatching: StravaSyncResult['planMatching'] = null;
   try {
     // Never let the matcher window be narrower than 30 days. When the
     // user re-clicks Sync now, last_synced_at is recent, so afterUnix
@@ -703,11 +717,18 @@ export async function syncStravaActivities(
     const matcherFromUnix = Math.min(afterUnix, fallbackAfter);
     const fromDateOnly = new Date(matcherFromUnix * 1000).toISOString().slice(0, 10);
     const toDateOnly = new Date(now).toISOString().slice(0, 10);
-    await applyPlanMatchingForUserDateRange(supabase, {
+    const matchSummary = await applyPlanMatchingForUserDateRange(supabase, {
       userId,
       fromDate: fromDateOnly,
       toDate: toDateOnly,
     });
+    planMatching = {
+      plannedSessionCount: matchSummary.plannedSessionCount,
+      workoutCount: matchSummary.workoutCount,
+      matchedCount: matchSummary.matchedCount,
+      windowFromDate: fromDateOnly,
+      windowToDate: toDateOnly,
+    };
   } catch (err) {
     console.error('syncStravaActivities: plan matching skipped:', err);
   }
@@ -721,5 +742,6 @@ export async function syncStravaActivities(
     workoutsAlreadyPresent: alreadyPresent,
     workoutsFailed: failed,
     tokenRefreshed,
+    planMatching,
   };
 }

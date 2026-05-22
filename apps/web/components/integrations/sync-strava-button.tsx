@@ -9,6 +9,18 @@ type SyncResult = {
   workoutsLinkedToApple?: number;
   workoutsAlreadyPresent?: number;
   workoutsFailed?: number;
+  /**
+   * Plan-matcher reconciliation result. Lets the athlete see whether the
+   * matcher actually ran and how many planned sessions it linked, so a
+   * "Fetched 0" Strava response doesn't hide stale plan_workout_matches.
+   */
+  planMatching?: {
+    plannedSessionCount: number;
+    workoutCount: number;
+    matchedCount: number;
+    windowFromDate: string;
+    windowToDate: string;
+  } | null;
 };
 
 /**
@@ -43,9 +55,14 @@ export function SyncStravaButton() {
       const failedSegment = data?.workoutsFailed && data.workoutsFailed > 0
         ? ` · failed ${data.workoutsFailed}`
         : '';
+      const matcherSegment = data?.planMatching
+        ? ` · matched ${data.planMatching.matchedCount} of ${data.planMatching.plannedSessionCount} planned (${data.planMatching.workoutCount} workouts in window)`
+        : data?.planMatching === null
+          ? ' · matcher skipped (see logs)'
+          : '';
       const summary =
         data && typeof data === 'object'
-          ? `Fetched ${data.activitiesFetched ?? 0} · new ${data.workoutsInserted ?? 0} · linked to Apple ${data.workoutsLinkedToApple ?? 0} · already present ${data.workoutsAlreadyPresent ?? 0}${failedSegment}`
+          ? `Fetched ${data.activitiesFetched ?? 0} · new ${data.workoutsInserted ?? 0} · linked to Apple ${data.workoutsLinkedToApple ?? 0} · already present ${data.workoutsAlreadyPresent ?? 0}${failedSegment}${matcherSegment}`
           : 'Sync complete.';
       setMessage(summary);
     } catch (err) {
