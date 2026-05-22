@@ -62,7 +62,7 @@ export default function HomePage() {
         <Card className="space-y-6">
           <div>
             <p className="eyebrow">Connected systems</p>
-            <h2 className="mt-2 text-2xl font-semibold text-white">What's wired up today.</h2>
+            <h2 className="mt-2 text-2xl font-semibold text-white">What&apos;s wired up today.</h2>
             <p className="mt-2 text-sm leading-6 text-muted">
               Each integration below is shipped end-to-end — the routes, persistence, and athlete-facing surfaces all exist. Sign in at <Link href="/settings/integrations" className="text-brand2">Integrations</Link> to start using them.
             </p>
