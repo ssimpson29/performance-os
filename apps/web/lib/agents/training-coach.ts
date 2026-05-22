@@ -362,12 +362,15 @@ async function callLlm(env: LlmEnv, systemPrompt: string, userPrompt: string): P
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
-        temperature: 0.4,
+        // gpt-5.5 / o1 / o3 reasoning-class models only accept temperature=1
+        // and reject other values with a 400. Older chat-completion models
+        // accept the same value, so we use 1 unconditionally.
+        temperature: 1,
         // OpenAI deprecated `max_tokens` in favor of `max_completion_tokens`
-        // for newer reasoning-class models (o1/o3/gpt-5/gpt-5.5). The newer
-        // parameter is also accepted by gpt-4o-class models, so we use it
-        // unconditionally going forward.
-        max_completion_tokens: 400,
+        // for the same reasoning-class models. Bumped to 2000 because
+        // reasoning models spend a chunk of the budget on internal reasoning
+        // tokens before producing the visible reply — 400 was too tight.
+        max_completion_tokens: 2000,
       }),
     });
     if (!response.ok) {

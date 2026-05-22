@@ -116,7 +116,11 @@ export async function extractPanelFromImage(args: {
             ],
           },
         ],
-        temperature: 0.0,
+        // gpt-5.5 / o1 / o3 only accept temperature=1; temp 0 used to be
+        // ideal for deterministic OCR but the reasoning models reject it.
+        // Determinism for the extraction is now carried by response_format
+        // (forces strict JSON) instead of temperature.
+        temperature: 1,
         // Use OpenAI's newer parameter so reasoning-class models (o1/o3/gpt-5)
         // don't reject the request with `unsupported_parameter: max_tokens`.
         max_completion_tokens: 2000,
