@@ -79,6 +79,8 @@ const sampleOutput = (): TrainingCoachOutput => ({
   injurySignal: { detected: true, bodyPart: 'foot', rationale: 'matched pattern' },
   recoverySignal: { detected: false, rationale: 'no positive phrase' },
   llmInvoked: false,
+  toolTrace: [],
+  planCommitted: false,
 });
 
 describe('persistTrainingCoachRun', () => {
