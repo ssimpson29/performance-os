@@ -143,4 +143,80 @@ describe('matchPlannedSessionsToWorkouts', () => {
     ]);
     expect(summary.unmatchedWorkoutIds).toEqual([]);
   });
+
+  it('links a Strava TrailRun to a planned "Trail Vert Session" (ultra-vocabulary)', () => {
+    // The Swiss Alps plan names its vert day "Trail Vert Session". None of
+    // the words 'run', 'aerobic', 'endurance' appear, but Strava reports the
+    // activity as 'TrailRun'. The classifier needs to bridge the vocabulary.
+    const planned: PlannedSessionForMatching[] = [
+      {
+        id: 'planned-vert',
+        sessionDate: '2026-05-21',
+        title: 'Trail Vert Session',
+        discipline: 'Trail Vert Session',
+        durationMinutes: null,
+        objective: 'Climbing-focused day, target plan vert',
+      },
+    ];
+    const actuals: ActualWorkoutForMatching[] = [
+      {
+        id: 'strava-trail',
+        externalId: 'strava-9001',
+        source: 'strava',
+        workoutType: 'TrailRun',
+        startedAt: '2026-05-21T13:00:00.000Z',
+        localDate: '2026-05-21',
+        durationSeconds: 10500, // 175 min
+        distanceMeters: 24270,
+      },
+    ];
+
+    const summary = matchPlannedSessionsToWorkouts(planned, actuals);
+    expect(summary.matches).toEqual([
+      expect.objectContaining({
+        plannedSessionId: 'planned-vert',
+        workoutId: 'strava-trail',
+        status: 'completed',
+      }),
+    ]);
+    expect(summary.unmatchedWorkoutIds).toEqual([]);
+  });
+
+  it('keeps "Trail Hike" classified as a hike, not accidentally as a run', () => {
+    // The objective intentionally avoids 'easy' / 'recovery' (those trigger
+    // the recovery classifier, which runs before hike). The point of this
+    // test is the hike-vs-run discrimination: even though my extended run
+    // regex includes 'trail', the hike branch is checked FIRST so 'Trail
+    // Hike' lands as hike, not run.
+    const planned: PlannedSessionForMatching[] = [
+      {
+        id: 'planned-hike',
+        sessionDate: '2026-05-21',
+        title: 'Trail Hike',
+        discipline: 'Hike',
+        durationMinutes: 120,
+        objective: 'Moderate effort with elevation',
+      },
+    ];
+    const actuals: ActualWorkoutForMatching[] = [
+      {
+        id: 'strava-hike',
+        externalId: 'strava-hike-1',
+        source: 'strava',
+        workoutType: 'Hike',
+        startedAt: '2026-05-21T13:00:00.000Z',
+        localDate: '2026-05-21',
+        durationSeconds: 7200,
+      },
+    ];
+
+    const summary = matchPlannedSessionsToWorkouts(planned, actuals);
+    expect(summary.matches).toEqual([
+      expect.objectContaining({
+        plannedSessionId: 'planned-hike',
+        workoutId: 'strava-hike',
+        status: 'completed',
+      }),
+    ]);
+  });
 });

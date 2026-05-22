@@ -225,20 +225,45 @@ export default async function PlanPage() {
               </p>
             </div>
           </div>
-          {view.adaptive.recommendations.length ? (
-            <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-5">
-              <p className="text-xs uppercase tracking-[0.18em] text-brand2">Today&apos;s per-day recommendations</p>
-              <ul className="mt-2 space-y-2 text-sm text-muted">
-                {view.adaptive.recommendations.map((rec) => (
-                  <li key={rec.day}>
-                    <span className="text-white">{rec.day}:</span> {rec.recommendedSessionType} —{' '}
-                    <span className="text-xs uppercase tracking-[0.18em] text-amber-300">{rec.action}</span>{' '}
-                    <span className="text-xs text-muted">{rec.reason}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
+          {view.adaptive.recommendations.length ? (() => {
+            // The adaptive engine emits a recommendation per day in the weekly
+            // structure (Monday…Sunday). For "what's next?" UX, show today's
+            // entry first, then the remaining days of the week in order, with
+            // today highlighted. Past days for this week are dropped — the
+            // athlete can't act on them anymore.
+            const DAY_ORDER = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+            const todayDayName = DAY_ORDER[new Date().getUTCDay()];
+            const todayIdx = DAY_ORDER.indexOf(todayDayName);
+            const upcomingDays = todayIdx >= 0
+              ? DAY_ORDER.slice(todayIdx).concat(DAY_ORDER.slice(0, todayIdx)).slice(0, 7 - todayIdx)
+              : DAY_ORDER;
+            const upcomingSet = new Set(upcomingDays);
+            const orderedRecs = [...view.adaptive.recommendations]
+              .filter((rec) => upcomingSet.has(rec.day))
+              .sort((a, b) => upcomingDays.indexOf(a.day) - upcomingDays.indexOf(b.day));
+            return (
+              <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-5">
+                <p className="text-xs uppercase tracking-[0.18em] text-brand2">
+                  This week — today + remaining days
+                </p>
+                <ul className="mt-2 space-y-2 text-sm text-muted">
+                  {orderedRecs.map((rec) => {
+                    const isToday = rec.day === todayDayName;
+                    return (
+                      <li key={rec.day} className={isToday ? 'rounded-lg bg-brand2/10 px-2 py-1' : ''}>
+                        <span className={isToday ? 'font-semibold text-brand2' : 'text-white'}>
+                          {rec.day}{isToday ? ' (today)' : ''}:
+                        </span>{' '}
+                        {rec.recommendedSessionType} —{' '}
+                        <span className="text-xs uppercase tracking-[0.18em] text-amber-300">{rec.action}</span>{' '}
+                        <span className="text-xs text-muted">{rec.reason}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            );
+          })() : null}
         </Card>
       </section>
 

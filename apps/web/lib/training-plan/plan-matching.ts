@@ -33,12 +33,23 @@ function classifySession(text: string): string {
     return 'strength';
   }
 
-  if (/(run|aerobic|endurance)/.test(normalized)) {
-    return 'run';
+  if (/(ride|bike|cycl)/.test(normalized)) {
+    return 'bike';
   }
 
+  // Hike BEFORE run so "Trail Hike" lands as hike, not run.
   if (/(hike|hiking)/.test(normalized)) {
     return 'hike';
+  }
+
+  // Run family — extended for ultra-training vocabulary. Plans frequently
+  // name run sessions "Trail Vert Session", "Hill Repeats", "Vert Run",
+  // "Mountain Day" etc. without the literal word "run". Strava's
+  // sport_type for those activities is still 'Run' or 'TrailRun', so the
+  // matcher needs to bridge the planned vocabulary to the actual category.
+  // Order matters: hike was checked first so "Trail Hike" doesn't collide.
+  if (/(run|jog|aerobic|endurance|trail|vert|hill|climb|mountain)/.test(normalized)) {
+    return 'run';
   }
 
   return normalized || 'other';
