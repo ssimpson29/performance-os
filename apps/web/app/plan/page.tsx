@@ -225,38 +225,115 @@ export default async function PlanPage() {
               </p>
             </div>
           </div>
-          {view.adaptive.recommendations.length ? (() => {
-            // The adaptive engine emits a recommendation per day in the weekly
-            // structure (Monday…Sunday). For "what's next?" UX, show today's
-            // entry first, then the remaining days of the week in order, with
-            // today highlighted. Past days for this week are dropped — the
-            // athlete can't act on them anymore.
-            const DAY_ORDER = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-            const todayDayName = DAY_ORDER[new Date().getUTCDay()];
-            const todayIdx = DAY_ORDER.indexOf(todayDayName);
-            const upcomingDays = todayIdx >= 0
-              ? DAY_ORDER.slice(todayIdx).concat(DAY_ORDER.slice(0, todayIdx)).slice(0, 7 - todayIdx)
-              : DAY_ORDER;
-            const upcomingSet = new Set(upcomingDays);
-            const orderedRecs = [...view.adaptive.recommendations]
-              .filter((rec) => upcomingSet.has(rec.day))
-              .sort((a, b) => upcomingDays.indexOf(a.day) - upcomingDays.indexOf(b.day));
+          {view.weeklyStructure.length ? (() => {
+            // Source of truth: the imported plan's weeklyStructure (always 7
+            // days). The adaptive engine only emits a recommendation when it
+            // wants to override the base — so we layer adaptations on top of
+            // the base plan rather than rendering only the overrides. That
+            // way today and tomorrow always render, even when the engine has
+            // nothing to change.
+            //
+            // Week starts Monday (ultra training convention — long run on
+            // the weekend ends the week). From any day, show that day
+            // through Sunday. Today gets highlighted in brand2.
+            const DAY_ORDER = [
+              'Monday',
+              'Tuesday',
+              'Wednesday',
+              'Thursday',
+              'Friday',
+              'Saturday',
+              'Sunday',
+            ];
+            // getUTCDay returns 0=Sun, 1=Mon, ..., 6=Sat. Convert to
+            // Monday-first: 0=Mon, ..., 6=Sun.
+            const utcDay = new Date().getUTCDay();
+            const todayIdx = utcDay === 0 ? 6 : utcDay - 1;
+            const todayDayName = DAY_ORDER[todayIdx];
+            // Today through end-of-week (Sunday). If today is Sunday, just
+            // Sunday. If today is Monday, all 7 days.
+            const upcomingDays = DAY_ORDER.slice(todayIdx);
+
+            const adaptationByDay = new Map(
+              view.adaptive.recommendations.map((rec) => [rec.day, rec]),
+            );
+            const baseByDay = new Map(
+              view.weeklyStructure.map((session) => [session.day, session]),
+            );
+
+            const rows = upcomingDays
+              .map((day) => {
+                const base = baseByDay.get(day);
+                const adaptation = adaptationByDay.get(day);
+                if (!base && !adaptation) return null;
+                return {
+                  day,
+                  isToday: day === todayDayName,
+                  baseSession: base?.runSession ?? null,
+                  baseDetails: base?.details ?? null,
+                  recommendedSession: adaptation?.recommendedSessionType ?? null,
+                  action: adaptation?.action ?? null,
+                  reason: adaptation?.reason ?? null,
+                };
+              })
+              .filter((r): r is NonNullable<typeof r> => r !== null);
+
+            if (rows.length === 0) return null;
+
             return (
               <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-5">
                 <p className="text-xs uppercase tracking-[0.18em] text-brand2">
                   This week — today + remaining days
                 </p>
                 <ul className="mt-2 space-y-2 text-sm text-muted">
-                  {orderedRecs.map((rec) => {
-                    const isToday = rec.day === todayDayName;
+                  {rows.map((row) => {
+                    // Choose the headline session: adaptation wins when it
+                    // changes things; otherwise show the base session.
+                    const headlineSession =
+                      row.recommendedSession ?? row.baseSession ?? '—';
+                    const isOverridden =
+                      row.action != null && row.action !== 'keep';
                     return (
-                      <li key={rec.day} className={isToday ? 'rounded-lg bg-brand2/10 px-2 py-1' : ''}>
-                        <span className={isToday ? 'font-semibold text-brand2' : 'text-white'}>
-                          {rec.day}{isToday ? ' (today)' : ''}:
+                      <li
+                        key={row.day}
+                        className={
+                          row.isToday ? 'rounded-lg bg-brand2/10 px-2 py-1' : ''
+                        }
+                      >
+                        <span
+                          className={
+                            row.isToday
+                              ? 'font-semibold text-brand2'
+                              : 'text-white'
+                          }
+                        >
+                          {row.day}
+                          {row.isToday ? ' (today)' : ''}:
                         </span>{' '}
-                        {rec.recommendedSessionType} —{' '}
-                        <span className="text-xs uppercase tracking-[0.18em] text-amber-300">{rec.action}</span>{' '}
-                        <span className="text-xs text-muted">{rec.reason}</span>
+                        {headlineSession}
+                        {isOverridden && row.action ? (
+                          <>
+                            {' — '}
+                            <span className="text-xs uppercase tracking-[0.18em] text-amber-300">
+                              {row.action}
+                            </span>
+                          </>
+                        ) : null}
+                        {row.reason ? (
+                          <>
+                            {' '}
+                            <span className="text-xs text-muted">
+                              {row.reason}
+                            </span>
+                          </>
+                        ) : row.baseDetails ? (
+                          <>
+                            {' '}
+                            <span className="text-xs text-muted">
+                              {row.baseDetails}
+                            </span>
+                          </>
+                        ) : null}
                       </li>
                     );
                   })}
