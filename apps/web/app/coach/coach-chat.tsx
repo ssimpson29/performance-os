@@ -7,12 +7,20 @@ import type {
   CoachConversationMessage,
   CoachFollowUp,
 } from '@/lib/agents/training-coach';
+import type { WeeklyStructureSession } from '@/lib/training-plan/types';
 
 export type CoachChatProps = {
-  initialMessage: string | null;
-  initialRecommendations: string[];
-  initialCautions: string[];
-  initialRationale: string | null;
+  /** ISO date (YYYY-MM-DD) representing "today" — used for the headline label. */
+  today: string;
+  /** Day-of-week name (e.g. "Tuesday") matching today's `weeklyStructure` row. */
+  day: string;
+  /**
+   * The planned session for today, looked up by day-of-week from the
+   * athlete's active training plan. Null when the plan has no row for
+   * today's day-of-week (off day, malformed import). Drives the
+   * "Today's call" headline — never the LLM conversation.
+   */
+  plannedSession: WeeklyStructureSession | null;
   initialConversation: CoachConversationMessage[];
   initialFollowUp: CoachFollowUp | null;
 };
@@ -39,11 +47,31 @@ function formatTimestamp(at: string | undefined): string {
   }
 }
 
+/**
+ * Render a WeeklyStructureSession as a small stack of labeled lines.
+ * Skips fields that are empty / whitespace so an off day with only a
+ * `runSession` doesn't render four blank rows.
+ */
+function PlannedSessionDetails({ session }: { session: WeeklyStructureSession }) {
+  const rows: Array<{ label: string; value: string }> = [];
+  if (session.details?.trim()) rows.push({ label: 'Details', value: session.details });
+  if (session.exactWork?.trim()) rows.push({ label: 'Exact work', value: session.exactWork });
+  if (session.strengthMobility?.trim())
+    rows.push({ label: 'Strength / mobility', value: session.strengthMobility });
+  if (rows.length === 0) return null;
+  return (
+    <dl className="mt-3 space-y-2 text-sm leading-6 text-muted">
+      {rows.map((r) => (
+        <div key={r.label}>
+          <dt className="text-xs uppercase tracking-[0.18em] text-brand2">{r.label}</dt>
+          <dd className="mt-1 text-white">{r.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 export function CoachChat(props: CoachChatProps) {
-  const [latestMessage, setLatestMessage] = useState<string | null>(props.initialMessage);
-  const [recommendations, setRecommendations] = useState<string[]>(props.initialRecommendations);
-  const [cautions, setCautions] = useState<string[]>(props.initialCautions);
-  const [rationale, setRationale] = useState<string | null>(props.initialRationale);
   const [conversation, setConversation] = useState<CoachConversationMessage[]>(props.initialConversation);
   const [followUp, setFollowUp] = useState<CoachFollowUp | null>(props.initialFollowUp);
   const [draft, setDraft] = useState('');
@@ -86,15 +114,13 @@ export function CoachChat(props: CoachChatProps) {
         return;
       }
 
-      setLatestMessage(data.message ?? null);
-      setRecommendations(data.recommendations ?? []);
-      setCautions(data.cautions ?? []);
-      setRationale(data.rationale ?? null);
+      // Update follow-up state — it can open/close on any turn.
       setFollowUp(data.followUp ?? null);
 
-      // The API returns the full conversation in its merge; for now append
-      // the coach reply locally for snappy UX. A future refinement would be
-      // to return + use the server-side trimmed conversation directly.
+      // Append the coach reply to the conversation thread. The reply is
+      // intentionally NOT used to overwrite the "Today's call" headline
+      // — that headline is the planned session for today, not whatever
+      // the coach last said. The chat may be off-topic relative to today.
       const coachReply: CoachConversationMessage = {
         role: 'coach',
         text: data.message ?? '',
@@ -124,34 +150,22 @@ export function CoachChat(props: CoachChatProps) {
         </Card>
       ) : null}
 
-      <Card className="space-y-4">
-        <div>
-          <p className="eyebrow">Today&apos;s call</p>
+      <Card className="space-y-2">
+        <p className="eyebrow">
+          Today&apos;s call · {props.day} {props.today}
+        </p>
+        {props.plannedSession ? (
+          <>
+            <h2 className="mt-2 text-2xl font-semibold text-white">
+              {props.plannedSession.runSession || 'Session planned for today'}
+            </h2>
+            <PlannedSessionDetails session={props.plannedSession} />
+          </>
+        ) : (
           <h2 className="mt-2 text-2xl font-semibold text-white">
-            {latestMessage ?? 'No coach run yet today. Send a message below to get started.'}
+            No session planned for {props.day} in your active plan.
           </h2>
-          {rationale ? <p className="mt-3 text-xs text-muted">Engine: {rationale}</p> : null}
-        </div>
-        {recommendations.length ? (
-          <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-4">
-            <p className="text-xs uppercase tracking-[0.18em] text-brand2">Recommendations</p>
-            <ul className="mt-2 space-y-1 text-sm text-muted">
-              {recommendations.map((r, i) => (
-                <li key={i}>• {r}</li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-        {cautions.length ? (
-          <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-4">
-            <p className="text-xs uppercase tracking-[0.18em] text-amber-300">Cautions</p>
-            <ul className="mt-2 space-y-1 text-sm text-muted">
-              {cautions.map((c, i) => (
-                <li key={i}>• {c}</li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
+        )}
       </Card>
 
       <Card className="space-y-4">

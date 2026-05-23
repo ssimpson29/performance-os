@@ -15,6 +15,23 @@ vi.mock('@/lib/agents/training-coach-persistence', () => ({ persistTrainingCoach
 const SAMPLE_CONTEXT = {
   userId: 'real-athlete',
   today: '2026-05-22',
+  // Profile shell: every athletic field null, mirroring an athlete who
+  // signed in but hasn't completed onboarding. Mock just needs the shape
+  // — the route forwards context to runTrainingCoach (also mocked).
+  profile: {
+    userId: 'real-athlete',
+    displayName: null,
+    timezone: null,
+    dateOfBirth: null,
+    sex: null,
+    heightCm: null,
+    weightKg: null,
+    primaryGoal: null,
+    experienceLevel: null,
+    weeklyTrainingHoursBaseline: null,
+    healthNotes: null,
+    onboardingCompletedAt: null,
+  },
   currentPlan: null,
   recentWorkouts: [],
   recoveryHistory: [],
@@ -23,6 +40,20 @@ const SAMPLE_CONTEXT = {
   longevityContext: null,
   conversation: [],
   followUp: null,
+  trainingSoul: {
+    userId: 'real-athlete',
+    kind: 'training',
+    content: '',
+    updatedBy: 'athlete',
+    updatedAt: null,
+  },
+  longevitySoul: {
+    userId: 'real-athlete',
+    kind: 'longevity',
+    content: '',
+    updatedBy: 'athlete',
+    updatedAt: null,
+  },
 };
 
 const SAMPLE_OUTPUT = {

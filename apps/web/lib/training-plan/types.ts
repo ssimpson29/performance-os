@@ -211,6 +211,14 @@ export type AdaptiveCoachInput = {
     notes?: string;
     evaluatedAt?: string;
   };
+  /**
+   * Coaching posture for this plan. Drives the engine's over/under
+   * thresholds, the adapt-up gate width, and the raise magnitude cap.
+   * Default 'balanced' preserves prior behavior when caller doesn't pass it.
+   * Sourced from training_plans.metadata.coachingPosture override (when
+   * present) or inferred from goal/raceContext via inferCoachingPosture.
+   */
+  coachingPosture?: import('./posture').CoachingPosture;
 };
 
 export type PhasePosition = {
@@ -273,6 +281,12 @@ export type AdaptiveCoachResult = {
   performanceDelta?: PerformanceDelta;
   /** Block-level adapt-up / adapt-down suggestion, distinct from per-day recommendations. */
   planAdaptation?: PlanAdaptation;
+  /**
+   * Resolved coaching posture used by this engine run. Surfaced so the
+   * LLM (via the runAdaptiveEngine tool) and any UI knows which posture
+   * the engine was tuned to — and can advocate at matching aggressiveness.
+   */
+  coachingPosture: import('./posture').CoachingPosture;
 };
 
 export type WorkoutSource = 'apple_health' | 'apple_watch' | 'manual' | 'training_plan' | 'strava';

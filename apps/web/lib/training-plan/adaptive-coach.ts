@@ -1,3 +1,9 @@
+import {
+  POSTURE_TUNINGS,
+  resolveCoachingPosture,
+  type CoachingPosture,
+  type PostureTuning,
+} from './posture';
 import type {
   AdaptedRecommendation,
   AdaptiveCoachInput,
@@ -147,25 +153,35 @@ export function computeRecoveryTrend(history: RecoverySample[]): RecoveryTrend {
 // Performance delta (prescribed vs. completed)
 // ---------------------------------------------------------------------------
 
-const OVER_THRESHOLD = 0.08; // +8% completed-vs-prescribed → "over"
-const UNDER_THRESHOLD = -0.08; // -8% → "under"
+const DEFAULT_OVER_THRESHOLD = 0.08; // +8% completed-vs-prescribed → "over"
 
-function classifyDelta(volumeDelta: number | null, intensityDelta: number | null): PerformanceSignal {
+function classifyDelta(
+  volumeDelta: number | null,
+  intensityDelta: number | null,
+  overThreshold: number = DEFAULT_OVER_THRESHOLD,
+): PerformanceSignal {
   // Prefer volume signal; fall back to intensity. Null inputs → "on" (no info).
   const primary = volumeDelta ?? intensityDelta;
   if (primary == null) return 'on';
-  if (primary > OVER_THRESHOLD) return 'over';
-  if (primary < UNDER_THRESHOLD) return 'under';
+  if (primary > overThreshold) return 'over';
+  if (primary < -overThreshold) return 'under';
   return 'on';
 }
 
 /**
  * Compare the rolling-window prescribed targets to what the athlete actually
  * completed. Returns null deltas when no prescription is provided.
+ *
+ * `overThreshold` is symmetric — a delta beyond +threshold registers as
+ * 'over', beyond -threshold as 'under'. Posture-tuned: aggressive plans
+ * use a smaller threshold so over-performance trips earlier; conservative
+ * plans use a larger one so a few big weeks don't push the engine into
+ * raise territory unnecessarily.
  */
 export function computePerformanceDelta(input: {
   prescribed?: PrescribedWeek;
   completed: CompletedWorkout[];
+  overThreshold?: number;
 }): PerformanceDelta {
   const completedVolume = input.completed.reduce((s, w) => s + w.durationMinutes, 0);
   const completedIntensity = input.completed.length
@@ -187,7 +203,7 @@ export function computePerformanceDelta(input: {
   return {
     volumeDelta,
     intensityDelta,
-    signal: classifyDelta(volumeDelta, intensityDelta),
+    signal: classifyDelta(volumeDelta, intensityDelta, input.overThreshold ?? DEFAULT_OVER_THRESHOLD),
   };
 }
 
@@ -272,11 +288,14 @@ function buildRecommendation(session: WeeklyStructureSession, fatigueState: Fati
 /**
  * Easy-aerobic pace assumption used to convert miles → estimated minutes when
  * we need to compare prescribed mileage against a completed-workouts volume
- * sum (which is in minutes). 9 min/mi reflects a typical easy run pace for a
- * trained ultra athlete on rolling terrain. Caller can override by passing
+ * sum (which is in minutes). 10.5 min/mi reflects easy pace on the mixed
+ * trail / vertical terrain typical of ultra training (Swiss Alps 100 etc.) —
+ * 9 min/mi was too fast and made prescribed-minutes artificially low, which
+ * suppressed the over-performance signal even when athletes were running
+ * meaningfully more than the plan called for. Caller can override by passing
  * `prescribedWeek` directly with explicit minute / mile units.
  */
-const DEFAULT_EASY_PACE_MIN_PER_MILE = 9;
+const DEFAULT_EASY_PACE_MIN_PER_MILE = 10.5;
 
 /**
  * Parse a phaseBlocks mileageTarget cell (e.g. "62-65", "70–72", "65",
@@ -332,8 +351,18 @@ function computePlanAdaptation(args: {
   performanceDelta: PerformanceDelta | undefined;
   fatigueState: FatigueState;
   longevityRecoveryPriority?: 'low' | 'normal' | 'elevated';
+  posture: CoachingPosture;
+  tuning: PostureTuning;
 }): PlanAdaptation | undefined {
-  const { phasePosition, recoveryTrend, performanceDelta, fatigueState, longevityRecoveryPriority } = args;
+  const {
+    phasePosition,
+    recoveryTrend,
+    performanceDelta,
+    fatigueState,
+    longevityRecoveryPriority,
+    posture,
+    tuning,
+  } = args;
 
   // Race week is locked: no plan-level adaptation regardless of signals.
   if (phasePosition?.isRaceWeek) {
@@ -372,7 +401,7 @@ function computePlanAdaptation(args: {
     if (longevityElevated) reasons.push('Longevity Guru flagged recovery priority as elevated');
     if (recoveryDegrading) reasons.push('recovery markers trending down');
     if (underPerforming) reasons.push('completed volume is meaningfully below the prescribed week');
-    if (fatigueState === 'high') reasons.push('weekend overload is elevated');
+    if (fatigueState === 'high') reasons.push('weekend overload is high');
     return {
       suggestion: 'lower',
       magnitudePct: -10,
@@ -380,30 +409,56 @@ function computePlanAdaptation(args: {
     };
   }
 
-  // Adapt-up: only when over-performing with healthy/improving recovery,
-  // weekend fatigue is manageable, and the phase permits raises.
+  // Adapt-up: requires over-performance with healthy/improving recovery and
+  // a phase that permits raises. The fatigue gate is posture-tuned:
+  //   - aggressive: 'elevated' weekend fatigue does NOT block adapt-up; only
+  //     'high' does. Rationale: an athlete intentionally stacking big
+  //     weekends to build for an ultra is exhibiting the behavior we want
+  //     to recognize, not punish. 'high' stays a hard safety floor.
+  //   - balanced / conservative: original behavior — require 'manageable'.
+  // Conservative posture additionally prefers 'hold' over 'raise' even when
+  // the gate clears, so the engine defends the plan instead of stretching it.
   const overPerforming = performanceDelta?.signal === 'over';
   const recoveryHealthy =
     recoveryTrend == null ||
     recoveryTrend.direction === 'improving' ||
     (recoveryTrend.direction === 'stable' && (recoveryTrend.confidence ?? 0) >= 0.3);
+
+  // At this point the adapt-down branch above has returned when
+  // fatigueState === 'high', so TS narrows it to 'manageable' | 'elevated'.
+  // Posture tuning decides whether 'elevated' also clears the gate.
+  const fatigueClearsRaiseGate =
+    tuning.allowRaiseOnElevatedFatigue || fatigueState === 'manageable';
+
   if (
     overPerforming &&
     recoveryHealthy &&
-    fatigueState === 'manageable' &&
+    fatigueClearsRaiseGate &&
     phasePosition?.raiseAllowed &&
     !longevityElevated
   ) {
-    // Magnitude: scale with how much the athlete is over the prescription,
-    // capped at +12% so we don't lurch the plan in one block.
+    if (tuning.preferHoldOverRaise) {
+      return {
+        suggestion: 'hold',
+        magnitudePct: 0,
+        reason:
+          `Conservative posture (${posture}): athlete is over the prescribed week with healthy recovery, but the stated goal calls for patience — hold next block's targets rather than chase the extra load.`,
+      };
+    }
+    // Magnitude scales with the overshoot, capped by posture (balanced 12%,
+    // aggressive 15%, conservative 8% if it ever reaches this branch).
     const overshoot = Math.abs(performanceDelta?.volumeDelta ?? performanceDelta?.intensityDelta ?? 0.1);
-    const magnitudePct = Math.min(12, Math.round(overshoot * 100 * 0.6));
+    const magnitudePct = Math.min(tuning.raiseMagnitudeCap, Math.round(overshoot * 100 * 0.6));
+    const fatigueNote =
+      fatigueState === 'elevated' && tuning.allowRaiseOnElevatedFatigue
+        ? ' Weekend load is elevated — that is the intentional overload of an aggressive build, not a reason to back off.'
+        : '';
     return {
       suggestion: 'raise',
       magnitudePct,
       reason:
-        `Athlete is consistently completing more than the prescribed week with healthy/improving recovery in ${phasePosition.phaseName ?? 'the current phase'}; ` +
-        `raise next block's targets by ~${magnitudePct}% to extract more performance toward the race goal.`,
+        `Athlete is consistently completing more than the prescribed week with healthy/improving recovery in ${phasePosition.phaseName ?? 'the current phase'} (${posture} posture); ` +
+        `raise next block's targets by ~${magnitudePct}% to extract more performance toward the race goal.${fatigueNote}`,
     };
   }
 
@@ -484,6 +539,16 @@ function applyRaceAwareOverrides(
 // ---------------------------------------------------------------------------
 
 export function adaptWeeklyStructure(input: AdaptiveCoachInput): AdaptiveCoachResult {
+  // Resolve coaching posture: explicit input wins, otherwise infer from
+  // goal + raceContext text. Defaults to 'balanced' so callers that don't
+  // pass either get prior behavior.
+  const posture: CoachingPosture = resolveCoachingPosture({
+    explicit: input.coachingPosture ?? null,
+    goal: input.goal ?? null,
+    raceContext: input.raceContext ?? null,
+  });
+  const tuning = POSTURE_TUNINGS[posture];
+
   const relevantDays = new Set(['Saturday', 'Sunday']);
   const recentWeekend = input.completedWorkouts.filter((workout) => relevantDays.has(workout.day));
   const overloadScore = computeOverloadScore(recentWeekend, input.recoveryScore);
@@ -508,11 +573,14 @@ export function adaptWeeklyStructure(input: AdaptiveCoachInput): AdaptiveCoachRe
   // Use the caller-supplied prescribedWeek when present; otherwise auto-derive
   // it from phaseBlocks[currentPhase].weeks[currentWeek].mileageTarget so the
   // engine acts on the athlete's actual plan numbers, not just synthetic input.
+  // Posture-tuned over-threshold is applied either way so aggressive plans
+  // trip 'over' earlier.
   let performanceDelta: PerformanceDelta | undefined;
   if (input.prescribedWeek) {
     performanceDelta = computePerformanceDelta({
       prescribed: input.prescribedWeek,
       completed: input.completedWorkouts,
+      overThreshold: tuning.overThreshold,
     });
   } else {
     const autoMinutes = prescribedMinutesFromCurrentWeek(input.phaseBlocks, phasePosition);
@@ -520,6 +588,7 @@ export function adaptWeeklyStructure(input: AdaptiveCoachInput): AdaptiveCoachRe
       performanceDelta = computePerformanceDelta({
         prescribed: { volumeTarget: autoMinutes },
         completed: input.completedWorkouts,
+        overThreshold: tuning.overThreshold,
       });
     }
   }
@@ -540,6 +609,8 @@ export function adaptWeeklyStructure(input: AdaptiveCoachInput): AdaptiveCoachRe
     performanceDelta,
     fatigueState,
     longevityRecoveryPriority,
+    posture,
+    tuning,
   });
 
   return {
@@ -550,5 +621,6 @@ export function adaptWeeklyStructure(input: AdaptiveCoachInput): AdaptiveCoachRe
     recoveryTrend,
     performanceDelta,
     planAdaptation,
+    coachingPosture: posture,
   };
 }

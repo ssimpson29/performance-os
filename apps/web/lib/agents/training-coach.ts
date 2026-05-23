@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { resolveCoachingPosture, type CoachingPosture } from '@/lib/training-plan/posture';
 import type { AdaptiveCoachResult, AdaptedRecommendation } from '@/lib/training-plan/types';
 
 import type { AthleteContext } from './athlete-context';
@@ -185,7 +186,80 @@ function openFollowUpWindow(today: string, bodyPart?: string): CoachFollowUp {
 // System prompt — gives the coach genuine agency.
 // ---------------------------------------------------------------------------
 
-function buildSystemPrompt(ctx: AthleteContext): string {
+/**
+ * Posture-specific style guidance injected into the system prompt. The
+ * three blocks describe the same posture from three angles — how to read
+ * over-performance, how to write the reply, and the default lean when
+ * signals are mixed — so the LLM has a consistent voice. Exported (via
+ * `buildSystemPrompt`) for prompt-language tests.
+ */
+function postureGuidance(posture: CoachingPosture): string {
+  switch (posture) {
+    case 'aggressive':
+      return `**Coaching posture: AGGRESSIVE.** The athlete's goal is competitive (placement, podium, PR, sub-X). Read over-performance as opportunity, not warning. When runAdaptiveEngine returns planAdaptation.suggestion === 'raise', advocate for it concretely — cite the volumeDelta percentage, the posture, and propose what to lift in the next block (e.g. "lift the long run from 28 → 32 mi, hold Tuesday quality, lift mid-week aerobic from 12 → 14 mi"). When the athlete reports handling extra load well — running more than the plan, RPE feeling lower than expected, recovery scores holding — TREAT THAT AS THE PRIMARY SIGNAL and push for adapt-up even if you have to disagree with a "hold" from the engine. Read RPE / suffer score / HR drift as evidence of how training FEELS, not just how much volume happened. Default lean on mixed signals: push, don't pull back. The only hard floors are real injury, recovery degrading with high confidence, or a fatigueState of 'high' (not 'elevated' — 'elevated' is the intentional overload of an aggressive build).`;
+    case 'conservative':
+      return `**Coaching posture: CONSERVATIVE.** The athlete's goal is to finish / complete / experience the event, not to compete. Defend the plan over stretching it. When the athlete reports doing more than the plan, validate the effort but bias toward "let's let this consolidate" rather than chasing a raise. When runAdaptiveEngine returns planAdaptation.suggestion === 'raise' or 'hold' under conservative posture, default to 'hold' language and explain why patience compounds. Acknowledge enthusiasm without rewarding volume escalation. Default lean on mixed signals: patience first.`;
+    case 'balanced':
+    default:
+      return `**Coaching posture: BALANCED.** Standard adaptive coaching. Take the engine's planAdaptation suggestion at face value: advocate for raises when it says raise (citing the volumeDelta), defend the plan when it says hold, and back off when it says lower. Read RPE and suffer score alongside volume.`;
+  }
+}
+
+/**
+ * Inline both athlete souls (training + longevity) directly in the
+ * system prompt. The training soul is the LLM's own scratchpad of
+ * durable facts; the longevity soul is read-only here (the Longevity
+ * Guru owns writes to it) but framing health/lifestyle requests
+ * through the athlete's stated doctor / influencer preferences is
+ * exactly the kind of cross-coach awareness this surface is for.
+ *
+ * Each block is delimited so the LLM can find / reproduce the
+ * boundaries when it calls updateTrainingSoul.
+ */
+function buildSoulBlock(ctx: AthleteContext): string {
+  const t = ctx.trainingSoul;
+  const l = ctx.longevitySoul;
+  const trainingBody = t.content.trim() || '(empty — no facts recorded yet)';
+  const longevityBody = l.content.trim() || '(empty — no facts recorded yet)';
+  const trainingMeta = t.updatedAt
+    ? `last updated ${t.updatedAt.slice(0, 10)} by ${t.updatedBy}`
+    : 'never updated';
+  const longevityMeta = l.updatedAt
+    ? `last updated ${l.updatedAt.slice(0, 10)} by ${l.updatedBy}`
+    : 'never updated';
+  return `=== ATHLETE SOUL (training) — ${trainingMeta} ===
+${trainingBody}
+=== END ATHLETE SOUL (training) ===
+
+=== ATHLETE SOUL (longevity, read-only here) — ${longevityMeta} ===
+${longevityBody}
+=== END ATHLETE SOUL (longevity) ===
+
+These are durable facts about who the athlete is, what they value, and what they've told the coaches that should outlast any single conversation. Read them every turn. Frame your response through them. When the athlete shares a NEW durable fact (preference, value, doctor or influencer they trust, recurring pattern, hard constraint), call updateTrainingSoul to add it — PRESERVING all existing facts; the audit table keeps prior versions but the live soul is what the LLM sees, so a deletion is immediately costly. When in doubt, keep + append.`;
+}
+
+/**
+ * One-line profile summary surfaced near the top of the system prompt
+ * so the LLM doesn't ask the athlete for height / weight / DOB / sex /
+ * experience that the profile already carries. Fields render as "?"
+ * when missing — that's the LLM's signal to fill the gap via
+ * recordAthleteProfile when the conversation makes it relevant.
+ */
+function buildProfileSummary(ctx: AthleteContext): string {
+  const p = ctx.profile;
+  if (!p) return 'Profile: (not loaded).';
+  const dob = p.dateOfBirth ?? '?';
+  const sex = p.sex ?? '?';
+  const ht = p.heightCm != null ? `${p.heightCm}cm` : '?';
+  const wt = p.weightKg != null ? `${p.weightKg}kg` : '?';
+  const exp = p.experienceLevel ?? '?';
+  const hours = p.weeklyTrainingHoursBaseline != null ? `${p.weeklyTrainingHoursBaseline}h/wk` : '?';
+  const onboarded = p.onboardingCompletedAt ? 'onboarded' : 'NOT onboarded';
+  const health = p.healthNotes ? ` Health notes: ${p.healthNotes}` : '';
+  return `Profile (${onboarded}): DOB ${dob}, ${sex}, ${ht}, ${wt}, ${exp}, baseline ${hours}.${health}`;
+}
+
+export function buildSystemPrompt(ctx: AthleteContext): string {
   const planSummary = ctx.currentPlan
     ? `Active plan: ${ctx.currentPlan.raceContext?.raceName ?? 'untitled'} on ${ctx.currentPlan.raceDate ?? 'no race date'}, ${ctx.currentPlan.phaseBlocks.length} phase blocks.`
     : 'No active training plan on record.';
@@ -193,25 +267,65 @@ function buildSystemPrompt(ctx: AthleteContext): string {
     ? `Open follow-up window: easy through ${ctx.followUp.easyThroughDate}, check-in ${ctx.followUp.checkInDate}${ctx.followUp.bodyPart ? ` (${ctx.followUp.bodyPart})` : ''}.`
     : 'No open follow-up window.';
 
+  // Resolve posture the same way the engine does, so the prompt and the
+  // tool output agree about which posture is active. When no plan
+  // exists yet but the athlete has a primaryGoal on their profile,
+  // infer posture from that — useful for the new-athlete branch where
+  // the coach is helping build the first plan.
+  const posture: CoachingPosture = ctx.currentPlan
+    ? resolveCoachingPosture({
+        explicit: ctx.currentPlan.coachingPosture ?? null,
+        goal: ctx.currentPlan.goal ?? null,
+        raceContext: ctx.currentPlan.raceContext ?? null,
+      })
+    : resolveCoachingPosture({
+        explicit: null,
+        goal: ctx.profile?.primaryGoal ?? null,
+        raceContext: null,
+      });
+
+  // Goal source: prefer plan goal (current plan owns the active goal);
+  // fall back to profile primaryGoal for new athletes who haven't built
+  // a plan yet. Surface profile basics inline so the LLM doesn't burn
+  // turns asking for height / weight / age that we already have.
+  const goalText = ctx.currentPlan?.goal
+    ? `Athlete's stated goal: "${ctx.currentPlan.goal}".`
+    : ctx.profile?.primaryGoal
+    ? `Athlete's stated goal (from profile, no plan yet): "${ctx.profile.primaryGoal}".`
+    : "Athlete's stated goal: (not provided).";
+
+  const profileSummary = buildProfileSummary(ctx);
+  const soulBlock = buildSoulBlock(ctx);
+
   return `You are the athlete's Training Coach. You give intelligent, contextual advice grounded in their actual training data — not generic templates.
 
 Today: ${ctx.today}
 ${planSummary}
+${goalText}
+${profileSummary}
 ${followUpSummary}
 
-You have tools to inspect the athlete's recent workouts, injury history, biomarker panel, current plan, and to run the deterministic adaptive engine. Use them when the question warrants it. Don't call every tool every turn — only what's relevant.
+${soulBlock}
+
+${postureGuidance(posture)}
+
+You have tools to inspect the athlete's profile, recent workouts, injury history, biomarker panel, current plan, and to run the deterministic adaptive engine. You can also patch the profile and propose / commit a training plan. Use them when the question warrants it. Don't call every tool every turn — only what's relevant.
 
 **Anchor on dates, not feelings.** When the athlete refers to "yesterday", "Thursday", "this week's long run", or any specific workout, ALWAYS call getRecentWorkouts FIRST and match against the \`localDate\` field — never claim a workout doesn't exist without checking the data. Every workout in the tool output has its actual ISO date AND a \`description\` field (Strava annotations like "+8kg vest" go here — read them and use them in your reasoning). If the athlete mentions a specific date that doesn't appear in the data, say so — but only after you've looked.
 
 Key behaviors:
 
-- **Injury / pain reports.** When the athlete reports something physical (pain, strain, ache, swelling), call getInjuryHistory to see prior episodes, then ask ONE or TWO targeted clarifying questions (location, sharp vs dull, weight-bearing, when it started, recent shoe / surface change). Do not diagnose. Bias toward easy work for 3 days while it resolves; the system opens a follow-up window automatically.
+- **Injury / pain reports.** When the athlete reports something physical (pain, strain, ache, swelling), call getInjuryHistory to see prior episodes, then ask ONE or TWO targeted clarifying questions (location, sharp vs dull, weight-bearing, when it started, recent shoe / surface change). Do not diagnose. Bias toward easy work for 3 days while it resolves; the system opens a follow-up window automatically. This bias applies REGARDLESS of posture — even an aggressive plan respects acute injury signals.
 
 - **Recovery report.** When the athlete says "pain free", "better", "fine", "normal", "recovered" — acknowledge it and return to the normal plan (run runAdaptiveEngine if there's a plan).
 
-- **Daily question with active plan.** Call runAdaptiveEngine for today's per-day signal, optionally getRecentWorkouts for context. Give a clear recommendation. You may disagree with the engine when the broader context warrants it — explain why.
+- **"I'm handling more than the plan" report.** When the athlete reports running more volume than the plan calls for, or that the prescribed work felt easy, FIRST call runAdaptiveEngine to see what the engine says about the over-performance, AND call getRecentWorkouts to confirm the volume and read RPE / suffer score. Then respond per posture: aggressive → advocate concretely for raising next block; balanced → follow the engine; conservative → validate but counsel patience.
+
+- **Daily question with active plan.** Call runAdaptiveEngine for today's per-day signal, optionally getRecentWorkouts for context. Give a clear recommendation. You may disagree with the engine when the broader context warrants it — explain why. The posture above tells you which direction your disagreements should lean.
 
 - **No active plan + athlete mentions a race.** Confirm race details (name, date, distance, elevation), call getRecentWorkouts to anchor on current fitness, then call proposeRacePlan. Present the summary plainly (total weeks, phase split, peak mileage / vert, long-run progression). Ask the athlete to confirm before calling commitTrainingPlan. NEVER commit without explicit approval.
+
+- **New athlete — no plan AND profile thin or missing.** Call getAthleteProfile FIRST to see what's on file (the onboarding form may have populated some fields — height, weight, DOB, sex, primaryGoal, experienceLevel, weeklyTrainingHoursBaseline, healthNotes). Then ask only for what's missing OR what's relevant to plan-building, 1–2 questions per turn — never blast through everything. Use recordAthleteProfile to file each answer as you receive it ("How tall are you?" → patch heightCm). Once the profile is solid AND the athlete has named a race goal (or wants to build toward one), call getRecentWorkouts to anchor on real baseline fitness from Apple / Strava data, then call proposeRacePlan with currentFitness derived from the workouts + profile, race details from the conversation, and a constraints.longRunDay either from the athlete or the default (Saturday). Present the summary plainly, ASK for approval, and only call commitTrainingPlan after explicit "yes / commit it / go ahead." Posture for the new plan is inferred from primaryGoal automatically — no need to set it yourself.
 
 - **Plan modifications.** Out of scope for now — if the athlete asks to modify their existing plan, acknowledge and say you'll add this in a future revision.
 

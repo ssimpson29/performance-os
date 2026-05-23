@@ -7,6 +7,9 @@ import {
   loadRecoveryHistory,
   type ActiveTrainingPlanContext,
 } from '@/app/plan/coach-data';
+import { loadAthleteProfile, type AthleteProfile } from '@/lib/profile/profile-loader';
+import { loadSoul, type AthleteSoul } from '@/lib/profile/soul-loader';
+import type { CoachingPosture } from '@/lib/training-plan/posture';
 import type {
   AdaptiveCoachInput,
   CompletedWorkout,
@@ -78,6 +81,13 @@ export type CoachFollowUpStored = {
 export type AthleteContext = {
   userId: string;
   today: string;
+  /**
+   * Athlete profile (height, weight, DOB, sex, goal, experience,
+   * health notes, onboarding completion). Always present — when the
+   * athlete hasn't completed onboarding, fields are null but the shell
+   * is still returned so the coach's no-profile branch reads cleanly.
+   */
+  profile: AthleteProfile;
   /** Active training plan + metadata, or null when the athlete hasn't built one yet. */
   currentPlan: ActiveTrainingPlanContext | null;
   /** Recent completed workouts. Default lookback: 14 days. */
@@ -94,6 +104,15 @@ export type AthleteContext = {
   conversation: CoachConversationMessageStored[];
   /** Active follow-up window from a prior injury report, if any. */
   followUp: CoachFollowUpStored | null;
+  /**
+   * Durable "soul" memory documents. Read by both LLM agents' system
+   * prompts every turn so durable facts about the athlete (preferences,
+   * doctor / influencer trust, recurring patterns, hard constraints)
+   * outlast any single conversation. Empty-content shells when no row
+   * exists yet; never null.
+   */
+  trainingSoul: AthleteSoul;
+  longevitySoul: AthleteSoul;
 };
 
 const DEFAULT_WORKOUT_LOOKBACK_DAYS = 14;
@@ -281,6 +300,7 @@ export async function loadAthleteContext(
 
   // Run the independent loads in parallel.
   const [
+    profile,
     currentPlan,
     recentWorkouts,
     recoveryHistory,
@@ -288,7 +308,10 @@ export async function loadAthleteContext(
     biomarkers,
     longevityRaw,
     conversationState,
+    trainingSoul,
+    longevitySoul,
   ] = await Promise.all([
+    loadAthleteProfile(supabase, userId),
     loadActiveTrainingPlan(supabase, userId),
     loadCompletedWorkouts(supabase, userId, { today, lookbackDays: workoutLookback }),
     loadRecoveryHistory(supabase, userId, { today, lookbackDays: workoutLookback }),
@@ -296,6 +319,8 @@ export async function loadAthleteContext(
     loadLatestBiomarkers(supabase, userId),
     loadLongevityContextForAthlete(supabase, userId, today),
     loadCoachConversation(supabase, userId, today),
+    loadSoul(supabase, userId, 'training'),
+    loadSoul(supabase, userId, 'longevity'),
   ]);
 
   const longevityContext: LongevityContextSummary | null = longevityRaw
@@ -309,6 +334,7 @@ export async function loadAthleteContext(
   return {
     userId,
     today,
+    profile,
     currentPlan,
     recentWorkouts,
     recoveryHistory,
@@ -317,6 +343,8 @@ export async function loadAthleteContext(
     longevityContext,
     conversation: conversationState.conversation,
     followUp: conversationState.followUp,
+    trainingSoul,
+    longevitySoul,
   };
 }
 
@@ -334,6 +362,11 @@ export function toAdaptiveCoachInput(ctx: AthleteContext): AdaptiveCoachInput | 
   const dayOfWeek = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2])).getUTCDay();
   const currentDay = DAY_NAMES[dayOfWeek];
 
+  // Coaching posture override: surfaced by loadActiveTrainingPlan when
+  // training_plans.metadata.coachingPosture is set. Undefined → the engine
+  // infers from goal + raceContext text via inferCoachingPosture.
+  const explicitPosture: CoachingPosture | undefined = ctx.currentPlan.coachingPosture;
+
   return {
     weeklyStructure: ctx.currentPlan.weeklyStructure,
     completedWorkouts: ctx.recentWorkouts,
@@ -349,5 +382,7 @@ export function toAdaptiveCoachInput(ctx: AthleteContext): AdaptiveCoachInput | 
     goal: ctx.currentPlan.goal ?? undefined,
     raceContext: ctx.currentPlan.raceContext,
     longevityContext: ctx.longevityContext ?? undefined,
+    coachingPosture: explicitPosture,
   };
 }
+

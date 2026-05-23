@@ -344,24 +344,96 @@ export default async function PlanPage() {
         </Card>
       </section>
 
+      <section className="shell pb-8">
+        <Card className="space-y-4">
+          <div>
+            <p className="eyebrow">Full plan — phase blocks + weeks</p>
+            <h2 className="mt-2 text-xl font-semibold text-white">
+              {view.phaseBlocks.length} phases · {view.phaseBlocks.reduce((n, b) => n + b.weeks.length, 0)} weeks total.
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-muted">
+              Your full training plan, week by week. Today&apos;s week is highlighted; race week is marked. Deload weeks carry a tag.
+            </p>
+          </div>
+          <div className="space-y-6">
+            {view.phaseBlocks.map((block, phaseIdx) => {
+              const isCurrentPhase = view.adaptive.phasePosition?.phaseIndex === phaseIdx;
+              return (
+                <div key={`${block.phaseName}-${phaseIdx}`} className="space-y-2">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <h3 className="text-lg font-semibold text-white">{block.phaseName}</h3>
+                    <p className="text-xs uppercase tracking-[0.18em] text-brand2">
+                      {block.weeks.length} weeks{isCurrentPhase ? ' · current phase' : ''}
+                    </p>
+                  </div>
+                  <ul className="grid gap-2 md:grid-cols-2">
+                    {block.weeks.map((week, weekIdx) => {
+                      const isCurrentWeek =
+                        isCurrentPhase &&
+                        view.adaptive.phasePosition?.weekIndexInPhase === weekIdx;
+                      const isRaceWeek =
+                        view.adaptive.phasePosition?.isRaceWeek &&
+                        isCurrentPhase &&
+                        view.adaptive.phasePosition?.weekIndexInPhase === weekIdx;
+                      const baseClass =
+                        'rounded-2xl border p-4 text-sm leading-6 transition';
+                      const stateClass = isCurrentWeek
+                        ? 'border-brand2/60 bg-brand2/[0.06]'
+                        : 'border-white/5 bg-white/[0.03]';
+                      return (
+                        <li
+                          key={`${block.phaseName}-${week.weekLabel}-${weekIdx}`}
+                          className={`${baseClass} ${stateClass}`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="font-semibold text-white">
+                              Week {week.weekLabel}
+                              {isCurrentWeek ? ' · today' : ''}
+                              {isRaceWeek ? ' · RACE WEEK' : ''}
+                            </p>
+                            <div className="flex gap-2">
+                              {week.isDeload ? (
+                                <span className="rounded-full border border-amber-300/40 px-2 py-0.5 text-xs uppercase tracking-[0.18em] text-amber-300">
+                                  Deload
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
+                          <p className="mt-2 text-muted">
+                            <span className="text-white">{week.mileageTarget}</span> miles ·{' '}
+                            <span className="text-white">{week.vertTarget}</span> vert
+                            {week.fuelTarget ? (
+                              <>
+                                {' · '}
+                                fuel <span className="text-white">{week.fuelTarget}</span>
+                              </>
+                            ) : null}
+                          </p>
+                          {week.keyFocus ? (
+                            <p className="mt-1 text-xs text-muted">{week.keyFocus}</p>
+                          ) : null}
+                          {week.notes ? (
+                            <p className="mt-1 text-xs text-muted">{week.notes}</p>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      </section>
+
       <section className="shell grid gap-6 pb-8 lg:grid-cols-3">
         <Card className="space-y-4 lg:col-span-3">
           <div>
-            <p className="eyebrow">Phase blocks</p>
-            <h2 className="mt-2 text-xl font-semibold text-white">{view.phaseBlocks.length} phases on file.</h2>
-          </div>
-          <div className="grid gap-4 md:grid-cols-3">
-            {view.phaseBlocks.slice(0, 6).map((block) => (
-              <div key={block.phaseName} className="rounded-2xl border border-white/5 bg-white/[0.03] p-5">
-                <p className="text-xs uppercase tracking-[0.18em] text-brand2">{block.weeks.length} weeks</p>
-                <h3 className="mt-2 text-lg font-semibold text-white">{block.phaseName}</h3>
-                {block.weeks[0] ? (
-                  <p className="mt-3 text-sm leading-6 text-muted">
-                    First week: {block.weeks[0].mileageTarget} miles / {block.weeks[0].vertTarget}{block.weeks[0].fuelTarget ? ` / fuel ${block.weeks[0].fuelTarget}` : ''}
-                  </p>
-                ) : null}
-              </div>
-            ))}
+            <p className="eyebrow">Weekly structure (base template)</p>
+            <h2 className="mt-2 text-xl font-semibold text-white">7 days, base sessions</h2>
+            <p className="mt-2 text-sm text-muted">
+              The athlete-facing weekly template the plan adapts from. The race-aware engine adjusts specific days (intensity, downgrades) based on recent recovery / weekend load.
+            </p>
           </div>
         </Card>
 

@@ -9,6 +9,7 @@ export const appConfig = {
     { href: '/coach', label: 'Coach' },
     { href: '/longevity', label: 'Longevity' },
     { href: '/settings/integrations', label: 'Integrations' },
+    { href: '/account', label: 'Account' },
   ],
 } as const;
 

@@ -1,5 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import {
+  upsertAthleteProfile,
+  type AthleteProfilePatch,
+} from '@/lib/profile/profile-writer';
+import { updateSoul } from '@/lib/profile/soul-writer';
 import { adaptWeeklyStructure } from '@/lib/training-plan/adaptive-coach';
 
 import { toAdaptiveCoachInput, type AthleteContext } from './athlete-context';
@@ -243,6 +248,146 @@ const handleGetCurrentPlan: ToolHandler = async (_args, { ctx }) => {
 };
 
 // ---------------------------------------------------------------------------
+// Tool: getAthleteProfile
+// ---------------------------------------------------------------------------
+
+const getAthleteProfileDefinition: ToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'getAthleteProfile',
+    description:
+      "Get the athlete's structured profile: heightCm, weightKg, dateOfBirth, sex, primaryGoal (free text — what they're training for and why), experienceLevel ('beginner' | 'building' | 'experienced'), weeklyTrainingHoursBaseline (typical hours/week before this plan), healthNotes (chronic conditions / meds / allergies / surgeries), and onboardingCompletedAt. **Always call this BEFORE asking the athlete for any profile field** — half the time the answer is already on file. Fields are null when the athlete hasn't filled them yet; treat null as 'gap to fill via recordAthleteProfile when relevant', not as 'has been told this is unknown'.",
+    parameters: { type: 'object', properties: {} },
+  },
+};
+
+const handleGetAthleteProfile: ToolHandler = async (_args, { ctx }) => {
+  return JSON.stringify({ profile: ctx.profile });
+};
+
+// ---------------------------------------------------------------------------
+// Tool: recordAthleteProfile
+// ---------------------------------------------------------------------------
+
+const recordAthleteProfileDefinition: ToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'recordAthleteProfile',
+    description:
+      "Patch one or more athlete profile fields when the athlete tells you something new ('I'm 5'10\"', 'goal is to PR my marathon', 'I'm building back from 3 years off'). All fields optional — only include what the athlete actually told you. Don't fill in values you're guessing at. Do NOT call this to set onboardingCompletedAt — that's lifecycle-managed by the onboarding form. Returns the updated profile.",
+    parameters: {
+      type: 'object',
+      properties: {
+        displayName: { type: 'string' },
+        timezone: { type: 'string', description: 'IANA timezone, e.g. America/Denver.' },
+        dateOfBirth: { type: 'string', description: 'YYYY-MM-DD.' },
+        sex: { type: 'string', enum: ['male', 'female'] },
+        heightCm: { type: 'number' },
+        weightKg: { type: 'number' },
+        primaryGoal: {
+          type: 'string',
+          description: 'Free text. The exact goal the athlete states, in their words.',
+        },
+        experienceLevel: { type: 'string', enum: ['beginner', 'building', 'experienced'] },
+        weeklyTrainingHoursBaseline: {
+          type: 'number',
+          description: 'Typical training hours per week over the recent baseline (4-8 weeks).',
+        },
+        healthNotes: {
+          type: 'string',
+          description: 'Chronic conditions / meds / allergies / surgeries the coach should remember.',
+        },
+      },
+    },
+  },
+};
+
+const handleRecordAthleteProfile: ToolHandler = async (args, { ctx, supabase }) => {
+  const patch = (args ?? {}) as AthleteProfilePatch;
+  // Drop unknown keys defensively — the LLM occasionally sends extras.
+  const allowed: AthleteProfilePatch = {
+    displayName: patch.displayName,
+    timezone: patch.timezone,
+    dateOfBirth: patch.dateOfBirth,
+    sex: patch.sex,
+    heightCm: patch.heightCm,
+    weightKg: patch.weightKg,
+    primaryGoal: patch.primaryGoal,
+    experienceLevel: patch.experienceLevel,
+    weeklyTrainingHoursBaseline: patch.weeklyTrainingHoursBaseline,
+    healthNotes: patch.healthNotes,
+  };
+  // Empty patches are no-ops in the writer; return current shape.
+  try {
+    const updated = await upsertAthleteProfile(supabase, ctx.userId, allowed);
+    return JSON.stringify({ ok: true, profile: updated });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    return JSON.stringify({ ok: false, error: message });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Tool: getTrainingSoul
+// ---------------------------------------------------------------------------
+
+const getTrainingSoulDefinition: ToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'getTrainingSoul',
+    description:
+      "Get the current training-soul content for this athlete — a long-form markdown document of durable facts you've recorded over time: preferences (e.g. 'morning runs over evening', 'hates treadmill'), values (e.g. 'wants to be present for kids first, fast second'), recurring patterns (e.g. 'always sandbags Tuesday quality, gets hurt on weeks > 70mi'), hard constraints (e.g. 'never travel-train, max 6 days/week'). **Read this every turn before responding** so your reply reframes through what you already know. The longevity-soul is also already in your system prompt — no separate tool needed to read that.",
+    parameters: { type: 'object', properties: {} },
+  },
+};
+
+const handleGetTrainingSoul: ToolHandler = async (_args, { ctx }) => {
+  return JSON.stringify({ soul: ctx.trainingSoul });
+};
+
+// ---------------------------------------------------------------------------
+// Tool: updateTrainingSoul
+// ---------------------------------------------------------------------------
+
+const updateTrainingSoulDefinition: ToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'updateTrainingSoul',
+    description:
+      "Overwrite the training-soul markdown body. ⚠️ **PRESERVE EXISTING FACTS.** Always call getTrainingSoul first, then write back the full prior content PLUS your new additions. Do NOT delete a fact unless the athlete explicitly contradicts or retracts it. When facts evolve (e.g. athlete used to prefer mornings, now prefers evenings), append the new state and mark the prior as historical rather than deleting — the audit table keeps prior versions either way, but the live soul is what frames every reply, so a deletion is immediately costly. Use this when the athlete reveals a new durable preference, value, recurring pattern, doctor / influencer trust, hard constraint, or framing they want you to remember next time.",
+    parameters: {
+      type: 'object',
+      properties: {
+        content: {
+          type: 'string',
+          description: 'The FULL new markdown body. Prior content + your additions.',
+        },
+      },
+      required: ['content'],
+    },
+  },
+};
+
+const handleUpdateTrainingSoul: ToolHandler = async (args, { ctx, supabase }) => {
+  const a = (args ?? {}) as { content?: string };
+  if (typeof a.content !== 'string') {
+    return JSON.stringify({ ok: false, error: 'updateTrainingSoul requires content (string).' });
+  }
+  try {
+    const updated = await updateSoul(supabase, {
+      userId: ctx.userId,
+      kind: 'training',
+      content: a.content,
+      updatedBy: 'training_coach',
+    });
+    return JSON.stringify({ ok: true, soul: updated });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    return JSON.stringify({ ok: false, error: message });
+  }
+};
+
+// ---------------------------------------------------------------------------
 // Tool: runAdaptiveEngine
 // ---------------------------------------------------------------------------
 
@@ -251,7 +396,7 @@ const runAdaptiveEngineDefinition: ToolDefinition = {
   function: {
     name: 'runAdaptiveEngine',
     description:
-      "Run the deterministic race-aware engine for the athlete. Returns today's per-day recommendations, fatigue state, recovery trend, plan-level adapt-up/-down suggestion, and rationale. Use this when the athlete has an active plan and you want to incorporate the engine's signal into your reply. Returns { available: false } when no plan exists — don't rely on this for plan-creation conversations.",
+      "Run the deterministic race-aware engine for the athlete. Returns the resolved coachingPosture (aggressive | balanced | conservative — derived from the athlete's stated goal), the athlete's goal text and raceContext, today's per-day recommendations, fatigue state, recovery trend, performance delta vs. plan, and the plan-level adapt-up/-down suggestion with magnitude. **When planAdaptation.suggestion === 'raise', advocate for that raise concretely** — cite the volumeDelta and the posture, and recommend specifically what to lift next block. When it's 'lower', explain which signal triggered it. When 'hold', validate the plan. Returns { available: false } when no plan exists — don't rely on this for plan-creation conversations.",
     parameters: { type: 'object', properties: {} },
   },
 };
@@ -267,6 +412,11 @@ const handleRunAdaptiveEngine: ToolHandler = async (_args, { ctx }) => {
   const result = adaptWeeklyStructure(adaptiveInput);
   return JSON.stringify({
     available: true,
+    // Posture + goal + raceContext: surfaced so the LLM advocates at the
+    // matching aggressiveness rather than defaulting to caution.
+    coachingPosture: result.coachingPosture,
+    goal: ctx.currentPlan?.goal ?? null,
+    raceContext: ctx.currentPlan?.raceContext ?? null,
     fatigueState: result.fatigueState,
     overloadScore: result.overloadScore,
     phasePosition: result.phasePosition,
@@ -402,6 +552,10 @@ export const COACH_TOOL_DEFINITIONS: ToolDefinition[] = [
   getInjuryHistoryDefinition,
   getRecentBiomarkersDefinition,
   getCurrentPlanDefinition,
+  getAthleteProfileDefinition,
+  recordAthleteProfileDefinition,
+  getTrainingSoulDefinition,
+  updateTrainingSoulDefinition,
   runAdaptiveEngineDefinition,
   proposeRacePlanDefinition,
   commitTrainingPlanDefinition,
@@ -412,6 +566,10 @@ const HANDLERS: Record<string, ToolHandler> = {
   getInjuryHistory: handleGetInjuryHistory,
   getRecentBiomarkers: handleGetRecentBiomarkers,
   getCurrentPlan: handleGetCurrentPlan,
+  getAthleteProfile: handleGetAthleteProfile,
+  recordAthleteProfile: handleRecordAthleteProfile,
+  getTrainingSoul: handleGetTrainingSoul,
+  updateTrainingSoul: handleUpdateTrainingSoul,
   runAdaptiveEngine: handleRunAdaptiveEngine,
   proposeRacePlan: handleProposeRacePlan,
   commitTrainingPlan: handleCommitTrainingPlan,

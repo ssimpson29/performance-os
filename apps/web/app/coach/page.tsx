@@ -91,10 +91,9 @@ export default async function CoachPage() {
               </p>
             </Card>
             <CoachChat
-              initialMessage={state.latestMessage}
-              initialRecommendations={state.recommendations}
-              initialCautions={state.cautions}
-              initialRationale={state.rationale}
+              today={state.today}
+              day={state.day}
+              plannedSession={state.plannedSession}
               initialConversation={state.conversation}
               initialFollowUp={state.followUp}
             />

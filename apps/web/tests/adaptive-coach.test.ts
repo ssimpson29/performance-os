@@ -591,3 +591,225 @@ describe('adaptWeeklyStructure — auto-populates prescribedWeek from phaseBlock
     expect(adapted.performanceDelta).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Goal-aware coaching posture
+// ---------------------------------------------------------------------------
+
+describe('adaptWeeklyStructure — coaching posture surface', () => {
+  it('defaults to balanced when no posture and no goal text is provided', () => {
+    const adapted = adaptWeeklyStructure({
+      weeklyStructure,
+      completedWorkouts: manageableWeekend,
+      currentDay: 'Monday',
+      recoveryScore: 80,
+    });
+    expect(adapted.coachingPosture).toBe('balanced');
+  });
+
+  it('infers aggressive from a top-10 race goal', () => {
+    const adapted = adaptWeeklyStructure({
+      weeklyStructure,
+      completedWorkouts: manageableWeekend,
+      currentDay: 'Monday',
+      recoveryScore: 80,
+      goal: 'place top 10 at the Swiss Alps 100',
+    });
+    expect(adapted.coachingPosture).toBe('aggressive');
+  });
+
+  it('infers conservative from a "just finish" goal', () => {
+    const adapted = adaptWeeklyStructure({
+      weeklyStructure,
+      completedWorkouts: manageableWeekend,
+      currentDay: 'Monday',
+      recoveryScore: 80,
+      goal: 'just want to finish my first half marathon',
+    });
+    expect(adapted.coachingPosture).toBe('conservative');
+  });
+
+  it('honors an explicit coachingPosture over goal-text inference', () => {
+    const adapted = adaptWeeklyStructure({
+      weeklyStructure,
+      completedWorkouts: manageableWeekend,
+      currentDay: 'Monday',
+      recoveryScore: 80,
+      goal: 'just finish',
+      coachingPosture: 'aggressive',
+    });
+    expect(adapted.coachingPosture).toBe('aggressive');
+  });
+});
+
+describe('adaptWeeklyStructure — aggressive posture relaxes adapt-up gate', () => {
+  // Aggressive scenario: athlete is over-performing with healthy recovery,
+  // but weekend fatigue is 'elevated' (the very behavior they're trying to
+  // build). Under balanced posture this blocks adapt-up — under aggressive,
+  // it should not.
+  //
+  // Score math (see scoreWorkout + getFatigueState in adaptive-coach.ts):
+  //   Sat: 120 (load) + 180 * 0.35 (63) + 5 * 12 (60) = 243
+  //   Sun: 100 (load) + 120 * 0.35 (42) + 5 * 12 (60) = 202
+  //   Sum 445 + stacked bonus 90 = 535 → 'elevated' (≥ 320, < 560).
+  // Bump either workout much further and we'd cross 560 into 'high', which
+  // is a hard safety floor that NO posture relaxes — different test below.
+  const aggressiveOverWeekend: CompletedWorkout[] = [
+    { day: 'Saturday', durationMinutes: 180, intensityScore: 5, loadScore: 120, sessionType: 'Long Run' },
+    { day: 'Sunday', durationMinutes: 120, intensityScore: 5, loadScore: 100, sessionType: 'Mountain Long Run' },
+  ];
+
+  it('balanced posture: elevated weekend fatigue blocks adapt-up even when over-performing', () => {
+    const adapted = adaptWeeklyStructure({
+      weeklyStructure,
+      completedWorkouts: aggressiveOverWeekend,
+      currentDay: 'Monday',
+      recoveryScore: 82,
+      today: '2026-02-09',
+      planStartDate: '2026-02-02',
+      raceDate: '2026-08-07',
+      phaseBlocks: buildPhaseBlocks(),
+      prescribedWeek: { volumeTarget: 250 }, // 300 completed vs 250 → +20% over
+      recoveryHistory: steadyHealthyRecovery(),
+      coachingPosture: 'balanced',
+    });
+    expect(adapted.coachingPosture).toBe('balanced');
+    expect(adapted.fatigueState).toBe('elevated');
+    expect(adapted.performanceDelta?.signal).toBe('over');
+    // Balanced gate requires fatigueState === 'manageable' — so no raise.
+    expect(adapted.planAdaptation).toBeUndefined();
+  });
+
+  it('aggressive posture: elevated weekend fatigue does NOT block adapt-up when over-performing', () => {
+    const adapted = adaptWeeklyStructure({
+      weeklyStructure,
+      completedWorkouts: aggressiveOverWeekend,
+      currentDay: 'Monday',
+      recoveryScore: 82,
+      today: '2026-02-09',
+      planStartDate: '2026-02-02',
+      raceDate: '2026-08-07',
+      phaseBlocks: buildPhaseBlocks(),
+      prescribedWeek: { volumeTarget: 250 },
+      recoveryHistory: steadyHealthyRecovery(),
+      coachingPosture: 'aggressive',
+    });
+    expect(adapted.coachingPosture).toBe('aggressive');
+    expect(adapted.fatigueState).toBe('elevated');
+    expect(adapted.planAdaptation?.suggestion).toBe('raise');
+    expect(adapted.planAdaptation?.reason).toMatch(/aggressive/);
+    expect(adapted.planAdaptation?.reason).toMatch(/intentional overload/);
+  });
+
+  it("aggressive posture: 'high' fatigue is STILL a hard safety floor (no raise)", () => {
+    const adapted = adaptWeeklyStructure({
+      weeklyStructure,
+      completedWorkouts: overloadedWeekend, // pushes fatigueState to 'high'
+      currentDay: 'Monday',
+      recoveryScore: 82,
+      today: '2026-02-09',
+      planStartDate: '2026-02-02',
+      raceDate: '2026-08-07',
+      phaseBlocks: buildPhaseBlocks(),
+      prescribedWeek: { volumeTarget: 250 },
+      recoveryHistory: steadyHealthyRecovery(),
+      coachingPosture: 'aggressive',
+    });
+    expect(adapted.fatigueState).toBe('high');
+    // 'high' triggers adapt-down regardless of posture.
+    expect(adapted.planAdaptation?.suggestion).toBe('lower');
+  });
+
+  it('aggressive posture: lower over-threshold (5%) trips raise earlier than balanced (8%)', () => {
+    // Construct a workload that's +6% over prescribed — between 5% and 8%.
+    // Aggressive: over → raise. Balanced: on → no adaptation.
+    const lightWeekend: CompletedWorkout[] = [
+      { day: 'Saturday', durationMinutes: 159, intensityScore: 5, loadScore: 120, sessionType: 'Long Run' },
+    ];
+    const base = {
+      weeklyStructure,
+      completedWorkouts: lightWeekend,
+      currentDay: 'Monday',
+      recoveryScore: 80,
+      today: '2026-02-09',
+      planStartDate: '2026-02-02',
+      raceDate: '2026-08-07',
+      phaseBlocks: buildPhaseBlocks(),
+      prescribedWeek: { volumeTarget: 150 }, // 159 vs 150 → +6%
+      recoveryHistory: steadyHealthyRecovery(),
+    } as const;
+
+    const balancedRun = adaptWeeklyStructure({ ...base, coachingPosture: 'balanced' });
+    expect(balancedRun.performanceDelta?.signal).toBe('on'); // +6% < 8%
+
+    const aggressiveRun = adaptWeeklyStructure({ ...base, coachingPosture: 'aggressive' });
+    expect(aggressiveRun.performanceDelta?.signal).toBe('over'); // +6% > 5%
+    expect(aggressiveRun.planAdaptation?.suggestion).toBe('raise');
+  });
+
+  it('aggressive posture: raise magnitude cap is higher (up to 15%) than balanced (12%)', () => {
+    // Make completed volume hugely over prescribed so the overshoot * 60% formula
+    // would exceed the cap, forcing the cap to bind.
+    const bigOverWeekend: CompletedWorkout[] = [
+      { day: 'Saturday', durationMinutes: 240, intensityScore: 5, loadScore: 120, sessionType: 'Long Run' },
+    ];
+    const base = {
+      weeklyStructure,
+      completedWorkouts: bigOverWeekend,
+      currentDay: 'Monday',
+      recoveryScore: 80,
+      today: '2026-02-09',
+      planStartDate: '2026-02-02',
+      raceDate: '2026-08-07',
+      phaseBlocks: buildPhaseBlocks(),
+      prescribedWeek: { volumeTarget: 100 }, // 240 vs 100 → +140%
+      recoveryHistory: steadyHealthyRecovery(),
+    } as const;
+
+    const balanced = adaptWeeklyStructure({ ...base, coachingPosture: 'balanced' });
+    expect(balanced.planAdaptation?.magnitudePct).toBe(12);
+
+    const aggressive = adaptWeeklyStructure({ ...base, coachingPosture: 'aggressive' });
+    expect(aggressive.planAdaptation?.magnitudePct).toBe(15);
+  });
+});
+
+describe('adaptWeeklyStructure — conservative posture prefers hold over raise', () => {
+  it("conservative + over-performing + healthy recovery → 'hold' (not 'raise')", () => {
+    const adapted = adaptWeeklyStructure({
+      weeklyStructure,
+      completedWorkouts: manageableWeekend,
+      currentDay: 'Monday',
+      recoveryScore: 82,
+      today: '2026-02-09',
+      planStartDate: '2026-02-02',
+      raceDate: '2026-08-07',
+      phaseBlocks: buildPhaseBlocks(),
+      prescribedWeek: { volumeTarget: 120 }, // 150 vs 120 → +25%
+      recoveryHistory: steadyHealthyRecovery(),
+      coachingPosture: 'conservative',
+    });
+    expect(adapted.coachingPosture).toBe('conservative');
+    expect(adapted.performanceDelta?.signal).toBe('over');
+    expect(adapted.planAdaptation?.suggestion).toBe('hold');
+    expect(adapted.planAdaptation?.reason).toMatch(/conservative|patience/i);
+  });
+
+  it('conservative + slight over-performance (+10%) does not trip the 12% over-threshold', () => {
+    const adapted = adaptWeeklyStructure({
+      weeklyStructure,
+      completedWorkouts: manageableWeekend, // 150 min
+      currentDay: 'Monday',
+      recoveryScore: 80,
+      today: '2026-02-09',
+      planStartDate: '2026-02-02',
+      raceDate: '2026-08-07',
+      phaseBlocks: buildPhaseBlocks(),
+      prescribedWeek: { volumeTarget: 136 }, // 150 vs 136 → +10% — < 12% threshold
+      recoveryHistory: steadyHealthyRecovery(),
+      coachingPosture: 'conservative',
+    });
+    expect(adapted.performanceDelta?.signal).toBe('on');
+    expect(adapted.planAdaptation).toBeUndefined();
+  });
+});

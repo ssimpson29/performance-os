@@ -213,6 +213,12 @@ export type ActiveTrainingPlanContext = {
   phaseBlocks: PhaseBlock[];
   supportTemplates: SupportTemplate[];
   raceContext?: RaceContext;
+  /**
+   * Explicit coachingPosture override from training_plans.metadata.coachingPosture.
+   * Undefined when not set — engine then infers from goal text via
+   * inferCoachingPosture. Surfaced here so callers don't re-query metadata.
+   */
+  coachingPosture?: 'conservative' | 'balanced' | 'aggressive';
 };
 
 type TrainingPlanRow = {
@@ -248,6 +254,11 @@ export async function loadActiveTrainingPlan(
 
   const row = rows[0];
   const metadata = row.metadata ?? {};
+  const rawPosture = metadata.coachingPosture;
+  const coachingPosture =
+    rawPosture === 'conservative' || rawPosture === 'balanced' || rawPosture === 'aggressive'
+      ? rawPosture
+      : undefined;
   return {
     planId: row.id,
     planStartDate: row.start_date,
@@ -257,6 +268,7 @@ export async function loadActiveTrainingPlan(
     phaseBlocks: (metadata.phaseBlocks as PhaseBlock[] | undefined) ?? [],
     supportTemplates: (metadata.supportTemplates as SupportTemplate[] | undefined) ?? [],
     raceContext: metadata.raceContext as RaceContext | undefined,
+    coachingPosture,
   };
 }
 
@@ -352,5 +364,8 @@ export async function loadAdaptiveCoachContext(
     goal: plan.goal ?? undefined,
     raceContext: plan.raceContext,
     longevityContext: longevityContext ?? undefined,
+    // Forward posture override (when set on training_plans.metadata.coachingPosture);
+    // engine infers from goal/raceContext otherwise.
+    coachingPosture: plan.coachingPosture,
   };
 }

@@ -21,6 +21,23 @@ function makeContext(overrides: Partial<AthleteContext> = {}): AthleteContext {
   return {
     userId: 'user-1',
     today: '2026-05-22',
+    // Profile defaults to an un-onboarded shell so existing tests that
+    // didn't pass profile keep their previous behavior (no plan, sparse
+    // context). Tests can override via the spread.
+    profile: {
+      userId: 'user-1',
+      displayName: null,
+      timezone: null,
+      dateOfBirth: null,
+      sex: null,
+      heightCm: null,
+      weightKg: null,
+      primaryGoal: null,
+      experienceLevel: null,
+      weeklyTrainingHoursBaseline: null,
+      healthNotes: null,
+      onboardingCompletedAt: null,
+    },
     currentPlan: null,
     recentWorkouts: [],
     recoveryHistory: [],
@@ -29,6 +46,20 @@ function makeContext(overrides: Partial<AthleteContext> = {}): AthleteContext {
     longevityContext: null,
     conversation: [],
     followUp: null,
+    trainingSoul: {
+      userId: 'user-1',
+      kind: 'training' as const,
+      content: '',
+      updatedBy: 'athlete' as const,
+      updatedAt: null,
+    },
+    longevitySoul: {
+      userId: 'user-1',
+      kind: 'longevity' as const,
+      content: '',
+      updatedBy: 'athlete' as const,
+      updatedAt: null,
+    },
     ...overrides,
   };
 }
