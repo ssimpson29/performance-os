@@ -207,6 +207,160 @@ export const REFERENCE_CATALOG: Record<string, MarkerSpec> = {
     reference: { low: 60, high: 120 },
     optimal: { low: 90, high: 120 },
   },
+
+  // ---------------------------------------------------------------------
+  // Standard CMP + lipid panel markers — added 2026-05-23 after the
+  // Longevity Guru's first real panel ingest showed ~20 standard lab
+  // markers all flagging "No match." The longevity-leaning set above
+  // (apob / lp(a) / ApoE etc.) doesn't include the basics that every
+  // CMP / BMP / lipid panel produces. Adding them here so the Guru
+  // can actually reason about the athlete's full bloodwork.
+  //
+  // Ranges below are adult clinical references; optimal ranges are
+  // only set where there's an evidence-informed longevity target
+  // (e.g. total cholesterol low side, BUN mid-range for protein status).
+  // ---------------------------------------------------------------------
+
+  total_cholesterol: {
+    key: 'total_cholesterol',
+    displayName: 'Total Cholesterol',
+    domain: 'cardiometabolic',
+    canonicalUnit: 'mg/dL',
+    desiredDirection: 'low',
+    reference: { low: 0, high: 200 },
+    optimal: { low: 0, high: 180 },
+  },
+  ast: {
+    key: 'ast',
+    displayName: 'AST (Aspartate Aminotransferase)',
+    domain: 'liver_kidney',
+    canonicalUnit: 'U/L',
+    desiredDirection: 'low',
+    reference: { low: 0, high: 40 },
+    optimal: { low: 0, high: 25 },
+  },
+  alkaline_phosphatase: {
+    key: 'alkaline_phosphatase',
+    displayName: 'Alkaline Phosphatase',
+    domain: 'liver_kidney',
+    canonicalUnit: 'U/L',
+    desiredDirection: 'middle',
+    reference: { low: 40, high: 150 },
+  },
+  total_bilirubin: {
+    key: 'total_bilirubin',
+    displayName: 'Total Bilirubin',
+    domain: 'liver_kidney',
+    canonicalUnit: 'mg/dL',
+    desiredDirection: 'middle',
+    reference: { low: 0.1, high: 1.2 },
+  },
+  bun: {
+    key: 'bun',
+    displayName: 'Blood Urea Nitrogen (BUN)',
+    domain: 'liver_kidney',
+    canonicalUnit: 'mg/dL',
+    desiredDirection: 'middle',
+    reference: { low: 7, high: 20 },
+    optimal: { low: 10, high: 18 },
+    evidenceNotes: 'Mid-range BUN suggests adequate protein intake without overt kidney stress.',
+  },
+  creatinine: {
+    key: 'creatinine',
+    displayName: 'Creatinine',
+    domain: 'liver_kidney',
+    canonicalUnit: 'mg/dL',
+    desiredDirection: 'middle',
+    // General adult reference. Sex-specific overrides: males trend higher
+    // because of muscle mass.
+    reference: { low: 0.6, high: 1.3 },
+    overrides: [
+      { ageMin: 0, ageMax: Infinity, sex: 'female', reference: { low: 0.5, high: 1.1 } },
+      { ageMin: 0, ageMax: Infinity, sex: 'male', reference: { low: 0.7, high: 1.3 } },
+    ],
+  },
+  creatinine_clearance: {
+    key: 'creatinine_clearance',
+    displayName: 'Estimated Creatinine Clearance',
+    domain: 'liver_kidney',
+    canonicalUnit: 'mL/min',
+    desiredDirection: 'high',
+    reference: { low: 90, high: 140 },
+  },
+  albumin: {
+    key: 'albumin',
+    displayName: 'Albumin',
+    domain: 'liver_kidney',
+    canonicalUnit: 'g/dL',
+    desiredDirection: 'middle',
+    reference: { low: 3.5, high: 5.0 },
+    optimal: { low: 4.0, high: 5.0 },
+    evidenceNotes: 'Higher-end albumin (within range) tracks longevity in observational data — proxy for healthy protein status and low inflammation.',
+  },
+  total_protein: {
+    key: 'total_protein',
+    displayName: 'Total Protein',
+    domain: 'liver_kidney',
+    canonicalUnit: 'g/dL',
+    desiredDirection: 'middle',
+    reference: { low: 6.0, high: 8.3 },
+  },
+  sodium: {
+    key: 'sodium',
+    displayName: 'Sodium',
+    domain: 'other',
+    canonicalUnit: 'mmol/L',
+    desiredDirection: 'middle',
+    reference: { low: 135, high: 145 },
+  },
+  potassium: {
+    key: 'potassium',
+    displayName: 'Potassium',
+    domain: 'other',
+    canonicalUnit: 'mmol/L',
+    desiredDirection: 'middle',
+    reference: { low: 3.5, high: 5.0 },
+  },
+  chloride: {
+    key: 'chloride',
+    displayName: 'Chloride',
+    domain: 'other',
+    canonicalUnit: 'mmol/L',
+    desiredDirection: 'middle',
+    reference: { low: 96, high: 106 },
+  },
+  co2: {
+    key: 'co2',
+    displayName: 'CO2 (Bicarbonate)',
+    domain: 'other',
+    canonicalUnit: 'mmol/L',
+    desiredDirection: 'middle',
+    reference: { low: 22, high: 28 },
+  },
+  calcium: {
+    key: 'calcium',
+    displayName: 'Calcium',
+    domain: 'nutrients',
+    canonicalUnit: 'mg/dL',
+    desiredDirection: 'middle',
+    reference: { low: 8.5, high: 10.5 },
+  },
+  anion_gap: {
+    key: 'anion_gap',
+    displayName: 'Anion Gap',
+    domain: 'other',
+    canonicalUnit: 'mmol/L',
+    desiredDirection: 'middle',
+    reference: { low: 8, high: 16 },
+  },
+  osmolality: {
+    key: 'osmolality',
+    displayName: 'Osmolality (Calculated)',
+    domain: 'other',
+    canonicalUnit: 'mOsm/kg',
+    desiredDirection: 'middle',
+    reference: { low: 275, high: 295 },
+  },
 };
 
 // ---------------------------------------------------------------------------

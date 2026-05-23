@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import {
   extractPanelFromImage,
   matchRawNameToCatalogKey,
+  unitsEquivalent,
   type ExtractedBiomarker,
 } from '@/lib/longevity/image-extraction';
 import { getMarkerSpec } from '@/lib/longevity/reference-ranges';
@@ -118,7 +119,10 @@ export async function POST(request: Request) {
   const review: ReviewMarker[] = extracted.markers.map((m: ExtractedBiomarker) => {
     const markerKey = matchRawNameToCatalogKey(m.rawName);
     const spec = markerKey ? getMarkerSpec(markerKey) : null;
-    const unitMatchesCanonical = spec ? m.unit === spec.canonicalUnit : false;
+    // Use unitsEquivalent so "mL/min/1.73 m2" vs catalog "mL/min/1.73m2"
+    // and "unit/L" vs "U/L" both compare as equal — strict string match
+    // was producing bogus mismatch warnings for trivially-equivalent units.
+    const unitMatchesCanonical = spec ? unitsEquivalent(m.unit, spec.canonicalUnit) : false;
     if (markerKey && spec && !unitMatchesCanonical) {
       warnings.push(
         `"${m.rawName}" matched ${spec.displayName} but the extracted unit '${m.unit}' doesn't equal the catalog unit '${spec.canonicalUnit}'. Convert before saving.`,

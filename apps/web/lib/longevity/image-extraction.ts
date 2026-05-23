@@ -269,66 +269,193 @@ export async function extractPanelFromImage(args: {
  * loose fuzzy match. Returns null when nothing in the catalog matches.
  *
  * Matching rules (in priority order):
- *  1. Exact key match (e.g. "apob" → apob).
+ *  1. Exact catalog key match (e.g. "apob" → apob).
  *  2. Exact displayName match (case-insensitive).
- *  3. displayName substring match.
- *  4. Alias hint dictionary (e.g. "ldl cholesterol calculation" → ldl_c).
+ *  3. EXACT_ALIASES dictionary — covers short lab-report abbreviations
+ *     ("k" → potassium, "na" → sodium, "alb" → albumin). EXACT match
+ *     only; substring would false-positive on single-letter keys.
+ *  4. SUBSTRING_ALIASES dictionary — covers longer multi-word forms
+ *     that are safe to substring-match.
+ *  5. displayName substring match (only on multi-word display names).
  */
-const ALIAS_HINTS: Record<string, string> = {
-  'apolipoprotein b': 'apob',
+
+/**
+ * Exact-match aliases. Short lab-report abbreviations live here — they
+ * MUST NOT be substring-matched (`'k'.includes('k')` would route any
+ * marker containing the letter k to potassium). Both the bare form and
+ * common punctuation variants are listed.
+ */
+const EXACT_ALIASES: Record<string, string> = {
+  // Existing markers — exact short forms
   apob: 'apob',
-  'ldl cholesterol': 'ldl_c',
+  'apo b': 'apob',
   'ldl-c': 'ldl_c',
   'ldl calc': 'ldl_c',
-  'hdl cholesterol': 'hdl_c',
+  ldl: 'ldl_c',
+  'ldl chol': 'ldl_c',
+  'ldl chol calculated': 'ldl_c',
+  'ldl cholesterol calculated': 'ldl_c',
   'hdl-c': 'hdl_c',
+  hdl: 'hdl_c',
+  'hdl chol': 'hdl_c',
   triglyceride: 'triglycerides',
   triglycerides: 'triglycerides',
-  'lipoprotein(a)': 'lp_a',
+  tg: 'triglycerides',
+  trig: 'triglycerides',
   'lp(a)': 'lp_a',
   'lp a': 'lp_a',
-  'fasting glucose': 'fasting_glucose',
+  glu: 'fasting_glucose',
   glucose: 'fasting_glucose',
   hba1c: 'hba1c',
-  'hemoglobin a1c': 'hba1c',
-  'fasting insulin': 'fasting_insulin',
+  'hgb a1c': 'hba1c',
   insulin: 'fasting_insulin',
-  'high-sensitivity c-reactive protein': 'hs_crp',
-  'high sensitivity crp': 'hs_crp',
   'hs-crp': 'hs_crp',
   hscrp: 'hs_crp',
-  'total testosterone': 'total_testosterone',
   testosterone: 'total_testosterone',
-  '25-hydroxy vitamin d': 'vitamin_d',
   'vitamin d': 'vitamin_d',
-  'vitamin d, 25-hydroxy': 'vitamin_d',
   ferritin: 'ferritin',
-  'omega-3 index': 'omega_3_index',
-  'omega 3 index': 'omega_3_index',
   alt: 'alt',
-  'alanine aminotransferase': 'alt',
+  sgpt: 'alt',
   egfr: 'egfr',
   'estimated gfr': 'egfr',
+  'egfr ckd-epi': 'egfr',
+  'egfr ckdepi': 'egfr',
+
+  // New CMP / lipid panel markers
+  chol: 'total_cholesterol',
+  cholesterol: 'total_cholesterol',
+  'total cholesterol': 'total_cholesterol',
+  ast: 'ast',
+  sgot: 'ast',
+  'alk phos': 'alkaline_phosphatase',
+  alkphos: 'alkaline_phosphatase',
+  alp: 'alkaline_phosphatase',
+  'alkaline phosphatase': 'alkaline_phosphatase',
+  't bili': 'total_bilirubin',
+  tbili: 'total_bilirubin',
+  bilirubin: 'total_bilirubin',
+  'total bilirubin': 'total_bilirubin',
+  bun: 'bun',
+  'blood urea nitrogen': 'bun',
+  cret: 'creatinine',
+  creat: 'creatinine',
+  creatinine: 'creatinine',
+  crcl: 'creatinine_clearance',
+  'estimated crcl': 'creatinine_clearance',
+  'creatinine clearance': 'creatinine_clearance',
+  alb: 'albumin',
+  albumin: 'albumin',
+  prot: 'total_protein',
+  'total protein': 'total_protein',
+  // Electrolytes — short forms are inherently risky, so they ONLY live
+  // in EXACT_ALIASES. The matcher's substring tier never sees them.
+  na: 'sodium',
+  sodium: 'sodium',
+  k: 'potassium',
+  potassium: 'potassium',
+  cl: 'chloride',
+  'cl-': 'chloride',
+  chloride: 'chloride',
+  co2: 'co2',
+  bicarbonate: 'co2',
+  ca: 'calcium',
+  calcium: 'calcium',
+  'anion gap': 'anion_gap',
+  'anion gap calc': 'anion_gap',
+  osmolality: 'osmolality',
+  'osmolality calc': 'osmolality',
+};
+
+/**
+ * Substring-match aliases. ONLY long multi-word phrases that are
+ * unlikely to appear as substrings of unrelated marker names. Don't
+ * add anything shorter than ~10 characters here.
+ */
+const SUBSTRING_ALIASES: Record<string, string> = {
+  'apolipoprotein b': 'apob',
+  'ldl cholesterol': 'ldl_c',
+  'hdl cholesterol': 'hdl_c',
+  'lipoprotein(a)': 'lp_a',
+  'fasting glucose': 'fasting_glucose',
+  'fasting insulin': 'fasting_insulin',
+  'hemoglobin a1c': 'hba1c',
+  'high-sensitivity c-reactive protein': 'hs_crp',
+  'high sensitivity crp': 'hs_crp',
+  'total testosterone': 'total_testosterone',
+  '25-hydroxy vitamin d': 'vitamin_d',
+  'vitamin d, 25-hydroxy': 'vitamin_d',
+  'omega-3 index': 'omega_3_index',
+  'omega 3 index': 'omega_3_index',
+  'alanine aminotransferase': 'alt',
+  'aspartate aminotransferase': 'ast',
 };
 
 export function matchRawNameToCatalogKey(rawName: string): string | null {
-  const normalized = rawName.toLowerCase().trim().replace(/[,.]/g, '');
+  // Two normalizations: a light one that keeps hyphens / parens (so
+  // "LDL-C" and "Lp(a)" stay distinguishable), and an aggressive one
+  // that strips punctuation entirely (so "Cl-" matches "cl").
+  const normalized = rawName.toLowerCase().trim().replace(/[,.]/g, '').replace(/\s+/g, ' ');
+  const aggressive = normalized
+    .replace(/[-(),:]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 
+  // 1. Exact catalog key match.
   if (REFERENCE_CATALOG[normalized]) return normalized;
+  if (aggressive !== normalized && REFERENCE_CATALOG[aggressive]) return aggressive;
 
+  // 2. Exact displayName match (case-insensitive).
   for (const [k, spec] of Object.entries(REFERENCE_CATALOG)) {
-    if (spec.displayName.toLowerCase() === normalized) return k;
+    const dn = spec.displayName.toLowerCase();
+    if (dn === normalized || dn === aggressive) return k;
   }
 
-  if (ALIAS_HINTS[normalized]) return ALIAS_HINTS[normalized];
+  // 3. Exact alias match — covers short forms like "k" → potassium.
+  if (EXACT_ALIASES[normalized]) return EXACT_ALIASES[normalized];
+  if (aggressive !== normalized && EXACT_ALIASES[aggressive]) return EXACT_ALIASES[aggressive];
 
-  for (const [alias, key] of Object.entries(ALIAS_HINTS)) {
+  // 4. Substring matches over long aliases only.
+  for (const [alias, key] of Object.entries(SUBSTRING_ALIASES)) {
     if (normalized.includes(alias)) return key;
   }
 
+  // 5. Substring match against displayName, but only when the
+  // displayName is multi-word — avoids false positives on terse
+  // single-token names.
   for (const [k, spec] of Object.entries(REFERENCE_CATALOG)) {
-    if (normalized.includes(spec.displayName.toLowerCase())) return k;
+    const dn = spec.displayName.toLowerCase();
+    if (dn.length > 6 && normalized.includes(dn)) return k;
   }
 
   return null;
+}
+
+/**
+ * Normalize a unit string for comparison. Lab reports use slightly
+ * different forms of the same physical unit ("unit/L" vs "U/L",
+ * "mL/min/1.73 m2" vs "mL/min/1.73m2", "mg/dl" vs "mg/dL") which the
+ * exact-match comparison was flagging as mismatches. This canonicalizes
+ * both sides so equivalent units compare equal.
+ *
+ * Exported so the save route (/api/imports/biomarker-panel) can use the
+ * same comparison.
+ */
+export function normalizeUnit(unit: string): string {
+  return unit
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '')            // strip internal whitespace
+    .replace(/²/g, '2')              // m² → m2
+    .replace(/\^2/g, '2')            // m^2 → m2
+    .replace(/^units?\//, 'u/')      // unit/L | units/L → u/l
+    .replace(/^iu\//, 'u/');         // IU/L → u/l
+}
+
+/**
+ * Compare a raw lab-report unit string against a catalog canonical
+ * unit. Both sides go through normalizeUnit so equivalent forms count
+ * as equal — see normalizeUnit for the transforms applied.
+ */
+export function unitsEquivalent(raw: string, canonical: string): boolean {
+  return normalizeUnit(raw) === normalizeUnit(canonical);
 }
