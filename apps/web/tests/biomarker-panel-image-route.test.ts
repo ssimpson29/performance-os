@@ -57,6 +57,59 @@ describe('POST /api/imports/biomarker-panel-image', () => {
     await expect(response.json()).resolves.toMatchObject({ error: expect.stringMatching(/Unsupported MIME/) });
   });
 
+  it('happy path: PDF upload is accepted and passes through to the extractor with mimeType + filename', async () => {
+    getAuthenticatedUserId.mockResolvedValue('athlete-1');
+    extractPanelFromImage.mockResolvedValue({
+      panelDate: '2023-06-16',
+      provider: 'Quest',
+      panelName: 'Annual health summary',
+      markers: [{ rawName: 'Apolipoprotein B', value: 80, unit: 'mg/dL' }],
+    });
+    matchRawNameToCatalogKey.mockReturnValue('apob');
+
+    // %PDF header (0x25 0x50 0x44 0x46) so the File looks PDF-shaped.
+    const pdf = new File([new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d])], 'scott-panel.pdf', {
+      type: 'application/pdf',
+    });
+    const { POST } = await import('../app/api/imports/biomarker-panel-image/route');
+    const response = await POST(makeRequest(pdf));
+
+    expect(response.status).toBe(200);
+    // Critical: extractor IS called for PDFs (the whole point of this PR)
+    // and gets the right MIME + filename for OpenAI's `file` content type.
+    expect(extractPanelFromImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mimeType: 'application/pdf',
+        filename: 'scott-panel.pdf',
+      }),
+    );
+    const data = (await response.json()) as { panelDate: string | null };
+    expect(data.panelDate).toBe('2023-06-16');
+  });
+
+  it("surfaces the real API error when the model doesn't support PDF input", async () => {
+    getAuthenticatedUserId.mockResolvedValue('athlete-1');
+    // Simulate what the extractor throws when OpenAI returns a 400 for
+    // an older model that doesn't recognize the `file` content type.
+    extractPanelFromImage.mockRejectedValue(
+      new Error(
+        "Vision LLM returned 400 from gpt-3.5-turbo: 'file' content type not supported by this model",
+      ),
+    );
+
+    const pdf = new File([new Uint8Array([0x25, 0x50, 0x44, 0x46])], 'panel.pdf', {
+      type: 'application/pdf',
+    });
+    const { POST } = await import('../app/api/imports/biomarker-panel-image/route');
+    const response = await POST(makeRequest(pdf));
+
+    expect(response.status).toBe(502);
+    const json = await response.json();
+    // The athlete sees the actual provider message, not "not configured".
+    expect(json.error).toMatch(/file.{0,5}content type not supported/i);
+    expect(json.error).toMatch(/gpt-3\.5-turbo/);
+  });
+
   it('returns 503 when LLM env is unset (extractor returns null)', async () => {
     getAuthenticatedUserId.mockResolvedValue('athlete-1');
     extractPanelFromImage.mockResolvedValue(null);

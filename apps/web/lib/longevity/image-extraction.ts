@@ -79,13 +79,69 @@ ${knownMarkers}`;
 }
 
 /**
- * Extract biomarker data from an image using a vision-capable LLM.
- * Returns null when env is missing or the LLM call fails entirely.
- * Throws when the response is non-JSON or fundamentally malformed.
+ * Build the user-side content payload that gets sent to the vision LLM.
+ * Branches on mimeType:
+ *   - image/jpeg | image/png | image/webp → OpenAI's `image_url` content
+ *     type with a data URL. The legacy / universally-supported path.
+ *   - application/pdf → OpenAI's `file` content type added in late 2024.
+ *     The model handles rasterization + text-layer extraction internally,
+ *     so we don't need pdfjs-dist or @napi-rs/canvas. Requires `filename`.
+ *
+ * Older / non-OpenAI-compatible models that don't recognize the `file`
+ * content type will return HTTP 400 with a descriptive error — that
+ * bubbles up through extractPanelFromLabReport's throw-on-non-2xx path
+ * with the API's actual message, so the route surfaces it as a 502
+ * the athlete can action ("upgrade AI_COACH_MODEL to gpt-4o or later").
  */
-export async function extractPanelFromImage(args: {
-  imageBase64: string;
+function buildUserContent(args: {
+  base64: string;
   mimeType: string;
+  filename?: string;
+}): Array<Record<string, unknown>> {
+  if (args.mimeType === 'application/pdf') {
+    return [
+      { type: 'text', text: 'Extract the biomarker panel from this lab report PDF. Respond with JSON only.' },
+      {
+        type: 'file',
+        file: {
+          filename: args.filename ?? 'lab-report.pdf',
+          file_data: `data:application/pdf;base64,${args.base64}`,
+        },
+      },
+    ];
+  }
+  return [
+    { type: 'text', text: 'Extract the biomarker panel from this image. Respond with JSON only.' },
+    {
+      type: 'image_url',
+      image_url: { url: `data:${args.mimeType};base64,${args.base64}` },
+    },
+  ];
+}
+
+/**
+ * Extract biomarker data from a lab report (image OR PDF) using a
+ * vision-capable LLM.
+ *
+ * - Returns null ONLY when AI_COACH_* env is missing — that's the route's
+ *   signal to surface the "not configured" message.
+ * - Throws on every other failure (HTTP non-2xx from the model, network
+ *   timeout/abort, malformed JSON, missing markers array) so the route
+ *   can return the real error message to the user instead of silently
+ *   masking it as a config problem.
+ *
+ * Backward-compat alias `extractPanelFromImage` is exported below so
+ * existing callers don't break — new code should use the explicit
+ * `extractPanelFromLabReport` name.
+ */
+export async function extractPanelFromLabReport(args: {
+  /** Base64-encoded file bytes. The variable used to be `imageBase64` —
+   * we kept the name on the alias below for backward compat. */
+  fileBase64: string;
+  mimeType: string;
+  /** Original filename. Required by OpenAI for the `file` content type;
+   * defaults to a generic name when omitted. */
+  filename?: string;
 }): Promise<RawExtractedPanel | null> {
   const env = readLlmEnv();
   if (!env) return null;
@@ -107,13 +163,11 @@ export async function extractPanelFromImage(args: {
           { role: 'system', content: buildSystemPrompt() },
           {
             role: 'user',
-            content: [
-              { type: 'text', text: 'Extract the biomarker panel from this image. Respond with JSON only.' },
-              {
-                type: 'image_url',
-                image_url: { url: `data:${args.mimeType};base64,${args.imageBase64}` },
-              },
-            ],
+            content: buildUserContent({
+              base64: args.fileBase64,
+              mimeType: args.mimeType,
+              filename: args.filename,
+            }),
           },
         ],
         // gpt-5.5 / o1 / o3 only accept temperature=1; temp 0 used to be
@@ -127,15 +181,28 @@ export async function extractPanelFromImage(args: {
         response_format: { type: 'json_object' },
       }),
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      // Pull the API's actual error message so the route can show the
+      // user something useful ("model doesn't support vision",
+      // "image too large", etc.) instead of "not configured."
+      const body = await response.text().catch(() => '');
+      throw new Error(
+        `Vision LLM returned ${response.status} from ${env.model}: ${body.slice(0, 500) || '(empty body)'}`,
+      );
+    }
     const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
     raw = data.choices?.[0]?.message?.content?.trim() ?? null;
-  } catch {
-    return null;
+  } catch (err) {
+    // Network / abort / API-error surface with the real cause. Env-missing
+    // case never reaches this catch — handled by the early `return null`.
+    const message = err instanceof Error ? err.message : 'Vision LLM call failed';
+    throw new Error(message);
   } finally {
     clearTimeout(timeout);
   }
-  if (!raw) return null;
+  if (!raw) {
+    throw new Error('Vision LLM returned an empty response');
+  }
 
   // Parse + validate the LLM's JSON.
   let parsed: unknown;
@@ -173,6 +240,24 @@ export async function extractPanelFromImage(args: {
   const panelName = typeof obj.panelName === 'string' ? obj.panelName : null;
 
   return { panelDate, provider, panelName, markers };
+}
+
+/**
+ * Backward-compat alias. Pre-PDF callers passed `{ imageBase64, mimeType }`
+ * and called the function `extractPanelFromImage`. We keep both wired so
+ * old imports in tests + route still compile while new callers can use
+ * the more general `extractPanelFromLabReport` directly.
+ */
+export async function extractPanelFromImage(args: {
+  imageBase64: string;
+  mimeType: string;
+  filename?: string;
+}): Promise<RawExtractedPanel | null> {
+  return extractPanelFromLabReport({
+    fileBase64: args.imageBase64,
+    mimeType: args.mimeType,
+    filename: args.filename,
+  });
 }
 
 // ---------------------------------------------------------------------------

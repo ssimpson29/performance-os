@@ -9,7 +9,17 @@ import { getMarkerSpec } from '@/lib/longevity/reference-ranges';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { getAuthenticatedUserId } from '@/lib/server-auth';
 
-const SUPPORTED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
+// Vision-capable chat completions APIs accept image MIME types via the
+// `image_url` content type, and PDFs via the `file` content type
+// (OpenAI native support, added late 2024). The extractor dispatches on
+// mimeType. Older models that don't accept the `file` content type
+// return a 400 that bubbles up with a clear message — no silent fallback.
+const SUPPORTED_MIME = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'application/pdf',
+]);
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10MB
 
 type ReviewMarker = {
@@ -72,13 +82,27 @@ export async function POST(request: Request) {
 
   let extracted;
   try {
-    extracted = await extractPanelFromImage({ imageBase64, mimeType: file.type });
+    extracted = await extractPanelFromImage({
+      imageBase64,
+      mimeType: file.type,
+      // OpenAI requires `filename` on the `file` content type for PDFs.
+      // Pass the original upload name; fall back to a generic when the
+      // browser somehow sent an empty name.
+      filename: file.name || 'lab-report',
+    });
   } catch (err) {
+    // Vision LLM threw — propagate the real error (API rejection, timeout,
+    // malformed JSON, missing markers array). This is NOT the "env missing"
+    // path; env-missing is the only case where extractPanelFromImage now
+    // returns null without throwing.
     const message = err instanceof Error ? err.message : 'Vision extraction failed';
+    console.error('[biomarker-panel-image] extraction threw:', message);
     return NextResponse.json({ error: message }, { status: 502 });
   }
 
   if (!extracted) {
+    // Only path to `null` is `readLlmEnv()` returning null — i.e. one of
+    // AI_COACH_API_KEY / AI_COACH_MODEL / AI_COACH_BASE_URL is unset.
     return NextResponse.json(
       {
         error:

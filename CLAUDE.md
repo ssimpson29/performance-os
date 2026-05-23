@@ -176,14 +176,33 @@ The system prompt gives the LLM agency rather than restricting it to "translate 
 
 LLM is optional. Always preserve deterministic fallback for tests, local dev, and provider outages.
 
-### Image-based ingestion (vision LLM)
-- `POST /api/imports/biomarker-panel-image` accepts a JPG/PNG/WebP/PDF
-  and calls a vision-capable model (`AI_COACH_MODEL` must be vision-capable —
-  `gpt-4o`-class). Returns extracted markers in a **review** payload —
-  does not save to `biomarker_results` directly. UI at `/longevity/import`
-  surfaces the review table; the user corrects, then Save commits via the
-  existing `POST /api/imports/biomarker-panel` JSON route. Unmatched
-  marker names and unit mismatches are flagged but skipped on save.
+### Image / PDF-based ingestion (vision LLM)
+- `POST /api/imports/biomarker-panel-image` accepts JPG / PNG / WebP /
+  PDF and calls a vision-capable model (`AI_COACH_MODEL` must be
+  vision-capable — `gpt-4o`-class or `gpt-5`-class). The extractor in
+  `lib/longevity/image-extraction.ts` dispatches on `mimeType`: images
+  use OpenAI's `image_url` content type, PDFs use the `file` content
+  type (filename required, base64 data URL inline). Same endpoint,
+  same prompt, same JSON parsing for both. Lab portal PDFs from
+  Quest / LabCorp / etc. work directly — no client-side conversion
+  needed. Returns extracted markers in a **review** payload — does not
+  save to `biomarker_results` directly. UI at `/longevity/import`
+  surfaces the review table; the user corrects, then Save commits via
+  the existing `POST /api/imports/biomarker-panel` JSON route.
+  Unmatched marker names and unit mismatches are flagged but skipped
+  on save.
+- **Error contract.** `extractPanelFromLabReport` returns `null` ONLY
+  when `AI_COACH_*` env is missing (route surfaces a 503 "not
+  configured"). On any other failure — HTTP non-2xx from the model,
+  network timeout/abort, malformed JSON, missing `markers` array —
+  the function throws with the API's actual error message, which the
+  route bubbles up as a 502 the user can action ("upgrade your model"
+  / "image too large" / etc.). Earlier versions silently masked all
+  failure modes as "not configured" — see commit history.
+- **PDF model requirement.** OpenAI added the `file` content type to
+  chat completions in late 2024. Works with `gpt-4o`, `gpt-4o-mini`,
+  `gpt-4.1`-class, `gpt-5`-class. Older models (`gpt-3.5-turbo`) reject
+  it with a 400 — the error message tells the athlete to upgrade.
 - For training plans: the existing `POST /api/imports/training-plan`
   takes the Excel workbook directly (no vision needed — the parser is
   deterministic). UI at `/plan/import`.

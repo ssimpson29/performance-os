@@ -159,7 +159,9 @@ export function PanelImageUploader() {
             disabled={extractStatus === 'extracting'}
             className="mt-2 block w-full text-sm text-muted file:mr-3 file:rounded-full file:border-0 file:bg-brand2 file:px-4 file:py-2 file:text-sm file:font-medium file:text-black"
           />
-          <span className="mt-1 block text-xs text-muted">JPG, PNG, WebP, or PDF. The vision LLM extracts values; you review before save.</span>
+          <span className="mt-1 block text-xs text-muted">
+            JPG, PNG, WebP, or PDF. Lab portal exports (Quest, LabCorp, etc.) work directly — no need to convert. The vision LLM extracts values; you review before save.
+          </span>
         </label>
         <div className="flex items-center justify-between gap-3">
           <span className="text-xs text-muted">
