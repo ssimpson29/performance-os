@@ -16,6 +16,8 @@
  * clinical decision support.
  */
 
+import { unitsEquivalent } from './units';
+
 export type BiomarkerDomain =
   | 'cardiometabolic'
   | 'inflammation'
@@ -426,7 +428,12 @@ export function evaluateMarker(input: EvaluateMarkerInput): EvaluateMarkerResult
       rationale: `Marker '${input.markerKey}' not in reference catalog.`,
     };
   }
-  if (input.unit !== spec.canonicalUnit) {
+  // Use unitsEquivalent so "mL/min/1.73 m2" vs "mL/min/1.73m2",
+  // "unit/L" vs "U/L", "IU/L" vs "U/L", and "mg/dl" vs "mg/dL" all
+  // compare as equal. The save route hits this path; strict string
+  // equality was rejecting trivially-equivalent labels with "Caller
+  // must normalize first" and blocking otherwise-valid panels.
+  if (!unitsEquivalent(input.unit, spec.canonicalUnit)) {
     throw new Error(
       `Unit mismatch for ${input.markerKey}: expected ${spec.canonicalUnit}, got ${input.unit}. Caller must normalize first.`,
     );

@@ -430,32 +430,8 @@ export function matchRawNameToCatalogKey(rawName: string): string | null {
   return null;
 }
 
-/**
- * Normalize a unit string for comparison. Lab reports use slightly
- * different forms of the same physical unit ("unit/L" vs "U/L",
- * "mL/min/1.73 m2" vs "mL/min/1.73m2", "mg/dl" vs "mg/dL") which the
- * exact-match comparison was flagging as mismatches. This canonicalizes
- * both sides so equivalent units compare equal.
- *
- * Exported so the save route (/api/imports/biomarker-panel) can use the
- * same comparison.
- */
-export function normalizeUnit(unit: string): string {
-  return unit
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, '')            // strip internal whitespace
-    .replace(/²/g, '2')              // m² → m2
-    .replace(/\^2/g, '2')            // m^2 → m2
-    .replace(/^units?\//, 'u/')      // unit/L | units/L → u/l
-    .replace(/^iu\//, 'u/');         // IU/L → u/l
-}
-
-/**
- * Compare a raw lab-report unit string against a catalog canonical
- * unit. Both sides go through normalizeUnit so equivalent forms count
- * as equal — see normalizeUnit for the transforms applied.
- */
-export function unitsEquivalent(raw: string, canonical: string): boolean {
-  return normalizeUnit(raw) === normalizeUnit(canonical);
-}
+// Unit normalization lives in `./units` so both this module (review
+// path) and `./reference-ranges` (save path via evaluateMarker) can
+// import without creating a circular dependency. Re-exported here so
+// existing call sites don't break.
+export { normalizeUnit, unitsEquivalent } from './units';
