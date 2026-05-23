@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { runLongevityGuru, type LongevityMarkerInput } from '@/lib/agents/longevity-guru';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { persistLongevityRun } from '@/lib/longevity/persistence';
+import { loadSoul } from '@/lib/profile/soul-loader';
 import { getAuthenticatedUserId } from '@/lib/server-auth';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 
@@ -108,6 +109,17 @@ export async function POST(request: Request) {
     sex = normalizeSex(u.sex);
   }
 
+  // Load the longevity soul so the guru can frame recommendations through
+  // the athlete's stated doctor / influencer preferences. Best-effort —
+  // missing soul is fine, the guru just runs without that framing.
+  let longevitySoul: string | undefined;
+  try {
+    const soul = await loadSoul(supabase, userId, 'longevity');
+    longevitySoul = soul.content.trim() || undefined;
+  } catch (err) {
+    console.warn('[longevity/evaluate] failed to load longevity soul:', err);
+  }
+
   const output = await runLongevityGuru({
     today,
     age,
@@ -115,6 +127,7 @@ export async function POST(request: Request) {
     markers,
     athleteQuestion: body?.athleteQuestion,
     healthHistory: body?.healthHistory,
+    longevitySoul,
   });
 
   const persisted = await persistLongevityRun(supabase, { userId, today, output });

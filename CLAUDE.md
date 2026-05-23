@@ -248,6 +248,175 @@ Persist race context on `training_plans`:
 ### Plan-vs-actual workflow
 The training plan defines weekly structure baseline. The coach adapts daily workouts using recent completed load + recovery context. Both Training Coach and Longevity Guru are LLM-driven agents, not static rules.
 
+### Athlete profile + onboarding
+The athlete profile lives on `public.users` (auth-created row, then
+extended via migrations 002 + 009). Columns the coach reads:
+`date_of_birth`, `sex`, `height_cm`, `weight_kg`, `timezone`,
+`display_name`, `primary_goal`, `experience_level`,
+`weekly_training_hours_baseline`, `health_notes`,
+`onboarding_completed_at`. Reach through `loadAthleteProfile` and
+`upsertAthleteProfile` in `lib/profile/` — never query the columns
+directly from a route or page. Past injuries land in `health_events`
+with `metadata.source='onboarding'` (form) or `'coach_message'`
+(regex-detected in chat).
+
+**Onboarding gate.** Middleware (`apps/web/middleware.ts`) redirects
+any signed-in athlete with null `onboarding_completed_at` to
+`/onboarding` on every protected request. Excluded paths: `/`,
+`/onboarding`, `/api/*`, `/auth/*`, `/docs*`. The completion endpoint
+`POST /api/onboarding/complete` (auth-scoped) accepts
+`{ profile: AthleteProfilePatch, injuries: [...], raceSeed? }`,
+upserts the profile, inserts injury rows, then calls
+`markOnboardingComplete` to stamp the timestamp. Form lives at
+`apps/web/app/onboarding/onboarding-flow.tsx` (5 steps: basics,
+training history, health, goal, connections). On submit the client
+stashes any `raceSeed` in sessionStorage and redirects to `/coach`.
+
+**AthleteContext extension.** `loadAthleteContext` now loads the
+profile in parallel with workouts / plan / recovery / etc., and
+surfaces it on `AthleteContext.profile`. The Training Coach system
+prompt renders a one-line `profileSummary` (DOB, sex, height, weight,
+experience, baseline hours, onboarded flag, health notes) inline so
+the LLM doesn't burn turns asking for fields already on file. New
+coach tools `getAthleteProfile` (read) and `recordAthleteProfile`
+(patch) let the coach fill gaps conversationally and persist them
+without round-tripping through the form.
+
+**New-athlete branch.** When `currentPlan === null`, the system
+prompt's "New athlete" behavior block tells the LLM to call
+`getAthleteProfile` first, ask only for missing fields 1–2 questions
+per turn (never blast through them all), patch via `recordAthleteProfile`,
+then once profile is solid + athlete has named a race goal call
+`getRecentWorkouts` for baseline + `proposeRacePlan`. Posture for the
+proposed plan is inferred from `profile.primaryGoal` automatically
+when no plan goal is yet on file — see the posture resolution path in
+`buildSystemPrompt`.
+
+### Athlete souls (durable LLM memory)
+Both LLM agents read two markdown documents per athlete on every turn
+so durable facts persist across sessions:
+
+- **Training soul** — written by the Training Coach via the
+  `updateTrainingSoul` tool, or by the athlete directly via `/account`.
+  Stores preferences, recurring patterns, hard constraints, doctor /
+  influencer trust, anything the coach should remember next time.
+- **Longevity soul** — written by the athlete via `/account` for v1;
+  Longevity Guru reads it but doesn't write yet (single-shot
+  architecture, no tool loop). Stores health framing — e.g. "filter
+  recommendations through Attia / Saladino," dietary philosophy,
+  chronic conditions context.
+
+Schema: `supabase/migrations/010_athlete_souls.sql`. Two tables:
+- `athlete_souls (user_id, kind enum 'training'|'longevity', content,
+  updated_by enum 'athlete'|'training_coach'|'longevity_guru', updated_at)`
+  with PK `(user_id, kind)`.
+- `athlete_soul_revisions` — immutable audit log; every prior content
+  value snapshotted on update so bad LLM rewrites are recoverable.
+
+Reach via `lib/profile/soul-loader.ts` (`loadSoul`) and
+`soul-writer.ts` (`updateSoul`). `AthleteContext` carries both souls
+on `.trainingSoul` and `.longevitySoul`, loaded in parallel by
+`loadAthleteContext`.
+
+**Prompt injection.** `buildSystemPrompt` (training coach) inlines both
+souls as fenced blocks (`=== ATHLETE SOUL (training) ===` / `=== ATHLETE
+SOUL (longevity, read-only here) ===`) right after the profile summary,
+with explicit instructions: preserve existing facts, append rather
+than overwrite, only delete on explicit retraction. The longevity
+guru's `buildSystemPrompt(longevitySoul)` is exported and conditionally
+includes its own `=== ATHLETE SOUL (longevity) ===` block when a soul
+string is passed via `RunLongevityGuruInput.longevitySoul`.
+
+**Idempotency.** `updateSoul` is a no-op when new content equals
+current content — no revision row, no `updated_at` bump. Avoids audit
+churn when an LLM rewrites with identical text.
+
+**API surface.** `PATCH /api/souls` (auth-scoped) with body
+`{ kind, content }` writes as `updatedBy: 'athlete'`. LLM-driven writes
+go through the training coach tool path (`updateTrainingSoul`) which
+attributes the author as `'training_coach'`.
+
+### Account page (`/account`)
+Server-rendered single-page editor for the athlete profile, with a
+secondary collapsible "What your coaches remember about you" section
+that exposes both souls. Profile edits go through `PATCH /api/profile`
+(does NOT re-stamp `onboarding_completed_at`). Soul edits go through
+`PATCH /api/souls`. Sign-out button in the page footer calls
+`POST /api/auth/signout`.
+
+The `/account` path is NOT subject to the onboarding-gate middleware
+redirect — the athlete should always be able to view their own state.
+
+### Auth header + sign-out
+`components/layout/app-header.tsx` is now an async server component
+that resolves auth state via `getAuthenticatedUser()` and renders
+either a "Sign in" link (to `/settings/integrations`) or the
+`<SignOutButton>` client component. Sign-out POSTs to
+`/api/auth/signout`, which uses the SSR Supabase client to clear
+session cookies via response `Set-Cookie` headers.
+
+### Plan view structure (`/plan`)
+Three sections, top-to-bottom:
+1. **Race-aware engine read** — phase, fatigue state, recovery trend,
+   performance vs. plan, plan-level adaptation suggestion.
+2. **This week** — today + remaining days from `weeklyStructure` with
+   adaptations layered. Today highlighted; overridden days marked.
+3. **Full plan — phase blocks + weeks** (added 2026-05-23). Each
+   `phaseBlocks[]` rendered as a header + `<ul>` of weeks; each week
+   shows `weekLabel`, `mileageTarget`, `vertTarget`, `keyFocus`, deload
+   tag. Current week is `phasePosition.phaseIndex + weekIndexInPhase`
+   and gets the `brand2` border; race week is marked. Static render
+   from `view.phaseBlocks` — no client JS, no extra DB query.
+
+### Coaching posture (goal-aware)
+The engine and the LLM both tune their aggressiveness to the athlete's
+stated goal. Three postures, defined in `apps/web/lib/training-plan/posture.ts`:
+
+- **aggressive** — competitive goals (top-N, podium, PR, sub-X, qualify).
+  Over-threshold drops to 5%, raise magnitude cap is 15%, and weekend
+  `fatigueState === 'elevated'` no longer blocks adapt-up (only `'high'`
+  does — that stays a safety floor). LLM prompt explicitly tells the
+  agent to advocate concretely when the engine signals a raise and to
+  TREAT "I'm handling more than the plan" as the PRIMARY signal —
+  including disagreeing with a "hold" from the engine when the athlete
+  reports handling extra load well.
+- **balanced** — default; current behavior. 8% over-threshold, 12% cap,
+  requires `fatigueState === 'manageable'` to raise. LLM takes engine
+  output at face value.
+- **conservative** — finisher / first-time goals. 12% over-threshold, 8%
+  cap, prefers `'hold'` over `'raise'` even when conditions clear. LLM
+  defaults to patience-first language and validates effort without
+  rewarding volume escalation.
+
+**Resolution order** (in `resolveCoachingPosture`):
+1. Explicit override from `training_plans.metadata.coachingPosture`
+   (`'conservative' | 'balanced' | 'aggressive'`). Surfaced on
+   `ActiveTrainingPlanContext.coachingPosture` so callers don't re-query.
+2. Heuristic `inferCoachingPosture(goal, raceContext)` over the athlete's
+   goal text and raceContext.goal / raceContext.notes. Aggressive
+   patterns dominate over conservative when both match (e.g. "PR my
+   first marathon" → aggressive).
+3. `'balanced'` when no signal.
+
+**Engine surface.** `adaptWeeklyStructure` reads `coachingPosture` from
+`AdaptiveCoachInput` (or infers it), tunes thresholds via
+`POSTURE_TUNINGS`, and returns the resolved posture on
+`AdaptiveCoachResult.coachingPosture`. The `runAdaptiveEngine` tool
+forwards posture + goal + raceContext to the LLM so the agent's
+advocacy matches the engine's gating.
+
+**Hard floors that ignore posture** (never relaxed):
+- Race week locks the plan (suggestion always `'hold'`).
+- Taper phase never raises.
+- `recoveryPriority === 'elevated'` from Longevity Guru blocks raise.
+- `fatigueState === 'high'` triggers adapt-down regardless of posture.
+- Acute injury signal opens the easy-through window regardless of posture.
+
+**Pace constant.** `DEFAULT_EASY_PACE_MIN_PER_MILE` is 10.5 (bumped from
+9) so prescribed-minutes derived from `phaseBlocks[i].weeks[j].mileageTarget`
+reflects real trail/ultra easy pace. Caller can still override by passing
+`prescribedWeek` directly.
+
 ### Duplicate-workout handling (multi-source ingest)
 The same training session can land in Performance OS twice: Apple Watch
 auto-uploads to Strava, and the athlete sometimes manually adds notes on
@@ -381,13 +550,132 @@ Failure is logged and non-fatal — the next sync re-tries.
   the Strava card so the one-time registration is a click. Required
   env: `STRAVA_WEBHOOK_VERIFY_TOKEN` (any opaque string).
 
-### 5. Plan docs index (existing)
+### 5. Goal-aware coaching posture + adapt-up fix — done (2026-05-23)
+- **Problem.** Adapt-up gate was symmetric to adapt-down on paper (4 conditions
+  each) but asymmetric in practice: adapt-down was 4-OR, adapt-up was 4-AND.
+  Crucially, `fatigueState === 'manageable'` was a required adapt-up condition,
+  but weekend stacking — the exact behavior that builds 100-mi fitness —
+  pushed `fatigueState` to `'elevated'` and silently disqualified the
+  athlete from a raise. Combined with a goal-blind LLM prompt that biased
+  toward caution, the coach told over-performing athletes to back off.
+- **Fix shipped:**
+  - New `apps/web/lib/training-plan/posture.ts` with `CoachingPosture`
+    type (aggressive | balanced | conservative), `POSTURE_TUNINGS` table,
+    `inferCoachingPosture(goal, raceContext)`, and `resolveCoachingPosture`.
+  - `adaptive-coach.ts`: posture-tuned over-threshold (5/8/12%), raise
+    magnitude cap (15/12/8), and `allowRaiseOnElevatedFatigue` flag so
+    aggressive posture lets `'elevated'` weekend fatigue through (only
+    `'high'` blocks). Conservative posture prefers `'hold'` over `'raise'`.
+  - Pace constant bump: `DEFAULT_EASY_PACE_MIN_PER_MILE` 9 → 10.5 so
+    prescribed-minutes for trail/ultra terrain isn't artificially low.
+  - `runAdaptiveEngine` tool now returns `coachingPosture`, `goal`, and
+    `raceContext` so the LLM can advocate at matching aggressiveness.
+  - System prompt rewritten with `postureGuidance(posture)` block,
+    explicit goal text, and a new "I'm handling more than the plan"
+    behavior with posture-tailored response. `buildSystemPrompt` is now
+    exported for tests.
+  - `ActiveTrainingPlanContext.coachingPosture` surfaces the
+    `training_plans.metadata.coachingPosture` override (when set) so the
+    engine and prompt agree on which posture is active.
+  - Tests: `tests/posture.test.ts` (inference + resolve), new
+    posture-aware blocks in `tests/adaptive-coach.test.ts`, and
+    `tests/training-coach-prompt.test.ts` for prompt anchors.
+
+### 6. Onboarding + coach-driven plan creation — done (2026-05-23)
+- **Problem.** New athletes had no path from sign-in to a real plan:
+  no profile fields, no onboarding flow, no way for the coach to read
+  or write profile data, and `/plan` only showed the current week.
+- **Fix shipped:**
+  - Migration `009_onboarding_profile.sql` — extends `public.users`
+    with `primary_goal`, `experience_level`, `weekly_training_hours_baseline`,
+    `health_notes`, `onboarding_completed_at`. Partial index on
+    pending-onboarding rows so the middleware gate query is cheap.
+  - `lib/profile/profile-loader.ts` + `profile-writer.ts` — typed
+    `AthleteProfile`, `loadAthleteProfile`, partial `upsertAthleteProfile`,
+    `markOnboardingComplete`, `isProfileCoachReady` helper.
+  - `AthleteContext.profile` — loaded in parallel with all other
+    context slices in `loadAthleteContext`.
+  - Coach tools `getAthleteProfile` + `recordAthleteProfile` — the
+    coach reads what's on file before asking, and patches what it
+    learns from chat.
+  - `/onboarding` route + `OnboardingFlow` (5-step form: basics,
+    training history, health/injuries, goal, connections) +
+    `POST /api/onboarding/complete` (auth-scoped: upserts profile,
+    inserts injury rows with `metadata.source='onboarding'`, stamps
+    timestamp, returns `raceSeed` for the coach to pick up).
+  - `middleware.ts` — redirects signed-in athletes with null
+    `onboarding_completed_at` to `/onboarding` on every protected
+    request. Excluded: `/`, `/onboarding`, `/api/*`, `/auth/*`, `/docs*`.
+  - `buildSystemPrompt` — surfaces profile inline, falls back to
+    `profile.primaryGoal` for the goal line when no plan exists, infers
+    posture from the profile goal text in the no-plan case, and adds
+    a "New athlete — no plan AND profile thin or missing" behavior
+    block: call `getAthleteProfile` first, ask 1–2 questions per turn,
+    patch via `recordAthleteProfile`, then `proposeRacePlan` →
+    `commitTrainingPlan` after explicit approval.
+  - `/plan` page — added "Full plan — phase blocks + weeks" section
+    grouped by phase, current week highlighted, race week marked,
+    deload tagged.
+  - Tests: `profile-loader.test.ts`, `profile-writer.test.ts`,
+    `onboarding-complete-route.test.ts`, `coach-tools-profile.test.ts`,
+    `middleware.test.ts`, plus extended `training-coach-prompt.test.ts`
+    for the new-athlete branch + profile-surface assertions.
+- **Plan doc:** `docs/plans/2026-05-23-onboarding-and-plan-creation.md`.
+
+### 7. Account page + athlete souls — done (2026-05-23)
+- **Problem.** After onboarding, no way to view / edit profile state,
+  no sign-out button, and no persistent memory across coach sessions.
+  An athlete telling the coach "filter health advice through Attia
+  and Saladino" lost that context as soon as the 20-message window
+  rolled.
+- **Fix shipped:**
+  - Migration `010_athlete_souls.sql` — two tables:
+    `athlete_souls (user_id, kind, content, updated_by, updated_at)`
+    (PK on user_id+kind) and `athlete_soul_revisions` (immutable audit
+    log; every prior content value snapshotted on update).
+  - `lib/profile/soul-loader.ts` + `soul-writer.ts` — typed
+    `AthleteSoul`, `loadSoul`, `updateSoul` with revision snapshot +
+    idempotent identical-content no-op.
+  - `AthleteContext.trainingSoul` + `longevitySoul` loaded in
+    parallel by `loadAthleteContext`.
+  - Coach tools `getTrainingSoul` + `updateTrainingSoul` — coach reads
+    + writes the training soul; description warns to preserve
+    existing facts and append rather than overwrite. Longevity soul
+    is read-only on the LLM side (athlete edits via UI in v1; guru
+    refactor to tool-loop is Phase 2).
+  - `buildSystemPrompt` (training coach) inlines BOTH souls as fenced
+    blocks right after the profile summary, with instructions to read
+    every turn and never silently delete facts.
+  - `lib/agents/longevity-guru.ts::buildSystemPrompt(longevitySoul?)`
+    now exported and conditionally includes a longevity soul block
+    that tells the LLM to frame every recommendation through any
+    doctor / influencer the athlete has named.
+  - `/account` page (server) + `account-form.tsx` (client) — profile
+    editor up top, two collapsible `<details>` blocks for the souls,
+    sign-out at the bottom. `PATCH /api/profile` (does NOT re-stamp
+    onboarding_completed_at), `PATCH /api/souls` (writes as
+    `updatedBy: 'athlete'`).
+  - `POST /api/auth/signout` clears Supabase session cookies via SSR
+    client. `<SignOutButton>` client component + async `AppHeader`
+    server component render a context-aware nav trailing slot
+    (Sign in link when anon; Sign out button when signed in).
+  - `appConfig.navigation` adds `/account`.
+  - Tests: `soul-loader.test.ts`, `soul-writer.test.ts`,
+    `coach-tools-soul.test.ts`, `profile-route.test.ts`,
+    `souls-route.test.ts`, `longevity-guru-soul.test.ts`,
+    `signout-route.test.ts`, plus extended
+    `training-coach-prompt.test.ts` with soul-injection anchors.
+- **Plan doc:** `docs/plans/2026-05-23-account-page-and-souls.md`.
+
+### 8. Plan docs index (existing)
 - `docs/plans/2026-05-04-training-import-and-adaptive-coach.md`
 - `docs/plans/2026-05-05-iphone-first-app-mvp.md`
 - `docs/plans/2026-05-07-production-deployment-and-ios-backend.md`
 - `docs/plans/2026-05-21-auth-scoping.md`
 - `docs/plans/2026-05-21-longevity-guru.md`
 - `docs/plans/2026-05-22-strava-integration.md`
+- `docs/plans/2026-05-23-onboarding-and-plan-creation.md`
+- `docs/plans/2026-05-23-account-page-and-souls.md`
 - `docs/deploy.md` — in-repo deployment guide (env matrix, Vercel
   recipe, post-deploy steps).
 

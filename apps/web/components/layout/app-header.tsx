@@ -1,8 +1,26 @@
 import Link from 'next/link';
+
+import { getAuthenticatedUser } from '@/lib/server-auth';
 import { appConfig } from '@/lib/site';
 import { cn } from '@/lib/utils';
 
-export function AppHeader({ currentPath }: { currentPath?: string }) {
+import { SignOutButton } from './sign-out-button';
+
+/**
+ * App-wide nav header. Server component so auth state can be resolved
+ * before render — that's how we know whether to show "Sign in" or
+ * the signed-in trailing slot (Account link is already in the main
+ * nav array; sign-out button lives in the trailing slot here).
+ *
+ * `currentPath` was previously passed by every page to highlight the
+ * active link, but since this is now a server component reading the
+ * URL via headers() is overkill — pages that want the highlight can
+ * still pass currentPath explicitly; otherwise the nav renders without
+ * an active state, which is fine.
+ */
+export async function AppHeader({ currentPath }: { currentPath?: string }) {
+  const user = await getAuthenticatedUser().catch(() => null);
+
   return (
     <header className="sticky top-0 z-40 border-b border-white/5 bg-slate-950/80 backdrop-blur">
       <div className="shell flex h-16 items-center justify-between gap-6">
@@ -26,6 +44,16 @@ export function AppHeader({ currentPath }: { currentPath?: string }) {
               </Link>
             );
           })}
+          {user ? (
+            <SignOutButton />
+          ) : (
+            <Link
+              href="/settings/integrations"
+              className="rounded-full bg-brand2 px-4 py-2 text-sm font-medium text-black"
+            >
+              Sign in
+            </Link>
+          )}
         </nav>
       </div>
     </header>

@@ -49,6 +49,16 @@ export type RunLongevityGuruInput = {
   athleteQuestion?: string;
   /** Optional health/family history one-liners surfaced to the LLM. */
   healthHistory?: string[];
+  /**
+   * Athlete's longevity soul — durable markdown body of doctor /
+   * influencer preferences (e.g. "filter health advice through Attia &
+   * Saladino"), dietary philosophies, chronic conditions context, and
+   * any framing the guru should run every recommendation through.
+   * Optional + read-only in v1: the athlete edits via /account; the
+   * guru references but does not (yet) write back. Phase 2 will give
+   * the guru a tool-calling loop and an updateLongevitySoul tool.
+   */
+  longevitySoul?: string;
 };
 
 export type LongevityMarkerEvaluation = {
@@ -227,7 +237,17 @@ function readLlmEnv(): LlmEnv | null {
   return { apiKey, model, baseUrl: baseUrl.replace(/\/$/, '') };
 }
 
-function buildSystemPrompt(): string {
+export function buildSystemPrompt(longevitySoul?: string): string {
+  const soulBody = (longevitySoul ?? '').trim();
+  const soulBlock = soulBody.length
+    ? `
+
+=== ATHLETE SOUL (longevity) ===
+${soulBody}
+=== END ATHLETE SOUL (longevity) ===
+
+These are durable facts about the athlete's health context, doctor / influencer preferences, dietary philosophy, and the lens they want you to evaluate longevity recommendations through. **Read every turn. Frame every recommendation through it.** If the athlete has named specific doctors or thinkers they trust (e.g. Peter Attia, Paul Saladino), explicitly route the topic through that lens first — "Attia's framing on apoB would point at..." — before adding your own synthesis. If something in the soul conflicts with what the deterministic engine prioritized, surface the conflict honestly rather than silently overriding either side.`
+    : '';
   return `You are the athlete's Longevity Guru. Your job is healthspan, not race day. Time horizon: months to decades.
 
 You receive the deterministic prioritization engine's output as ground truth. Do NOT re-prioritize against it — explain it, frame it for behavior change, and reference the athlete's specific markers. The Training Coach handles daily training; you focus on biomarker trends, lifestyle levers, and long-term trajectory.
@@ -236,7 +256,7 @@ Be evidence-informed but humble: you are not a clinician. Recommend lab interpre
 
 When the Longevity signal conflicts with the Training Coach (you want recovery; training wants intensity), surface the conflict honestly. The conflict resolution rule is sustained-signal-wins-for-longevity, acute-need-wins-for-training; never silently override.
 
-Keep responses under 180 words. Plain language. No emojis. No exclamation points unless the athlete uses them first.`;
+Keep responses under 180 words. Plain language. No emojis. No exclamation points unless the athlete uses them first.${soulBlock}`;
 }
 
 function buildUserPrompt(input: RunLongevityGuruInput, output: Omit<LongevityGuruOutput, 'narrative' | 'llmInvoked'>): string {
@@ -372,7 +392,11 @@ export async function runLongevityGuru(input: RunLongevityGuruInput): Promise<Lo
   let llmInvoked = false;
   if (env) {
     llmInvoked = true;
-    narrative = await callLlm(env, buildSystemPrompt(), buildUserPrompt(input, partialOutput));
+    narrative = await callLlm(
+      env,
+      buildSystemPrompt(input.longevitySoul),
+      buildUserPrompt(input, partialOutput),
+    );
   }
   if (!narrative) {
     narrative = deterministicNarrative(priorities, longevityContext);
