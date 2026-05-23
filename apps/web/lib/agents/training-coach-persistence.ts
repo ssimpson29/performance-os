@@ -39,8 +39,18 @@ export async function persistTrainingCoachRun(
   const existing: DailySummaryRow | undefined = (existingRows as DailySummaryRow[] | null)?.[0];
   const existingSummary = existing?.summary ?? {};
 
+  // Strip todaysCall on every chat turn so the next /coach load
+  // recomposes with the new conversation context (injury report,
+  // recovery report, "I'm handling more than the plan" report, etc.).
+  // Stale composed calls would otherwise outlast the context that
+  // produced them.
+  const { todaysCall: _staleTodaysCall, ...summaryWithoutTodaysCall } = existingSummary as Record<
+    string,
+    unknown
+  >;
+
   const mergedSummary: Record<string, unknown> = {
-    ...existingSummary,
+    ...summaryWithoutTodaysCall,
     coachConversation: output.conversation,
     coachRationale: output.rationale,
     coachRecommendations: output.recommendations,

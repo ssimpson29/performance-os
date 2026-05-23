@@ -94,6 +94,7 @@ export default async function CoachPage() {
               today={state.today}
               day={state.day}
               plannedSession={state.plannedSession}
+              todaysCall={state.todaysCall}
               initialConversation={state.conversation}
               initialFollowUp={state.followUp}
             />

@@ -3,6 +3,7 @@
 import { useState } from 'react';
 
 import { Card } from '@/components/ui/card';
+import type { TodaysCall } from '@/lib/agents/todays-call';
 import type {
   CoachConversationMessage,
   CoachFollowUp,
@@ -17,10 +18,17 @@ export type CoachChatProps = {
   /**
    * The planned session for today, looked up by day-of-week from the
    * athlete's active training plan. Null when the plan has no row for
-   * today's day-of-week (off day, malformed import). Drives the
-   * "Today's call" headline — never the LLM conversation.
+   * today's day-of-week (off day, malformed import). Used as the
+   * fallback when `todaysCall` is null (LLM composer unavailable).
    */
   plannedSession: WeeklyStructureSession | null;
+  /**
+   * LLM-composed structured workout call for today. When present, this
+   * is the source of truth for the Today's Call card — phase context,
+   * specific session, exact work, fuel, strength, rationale. Falls
+   * back to plannedSession when null.
+   */
+  todaysCall: TodaysCall | null;
   initialConversation: CoachConversationMessage[];
   initialFollowUp: CoachFollowUp | null;
 };
@@ -45,6 +53,45 @@ function formatTimestamp(at: string | undefined): string {
   } catch {
     return '';
   }
+}
+
+/**
+ * Render the structured Today's Call as a stack of labeled rows.
+ * Each field is independently rendered + skipped when empty so the
+ * card stays clean for rest days / minimal compositions.
+ */
+function TodaysCallBody({ call }: { call: TodaysCall }) {
+  const rows: Array<{ label: string; value: string }> = [];
+  if (call.details?.trim()) rows.push({ label: 'Details', value: call.details });
+  if (call.exactWork?.trim()) rows.push({ label: 'Exact work', value: call.exactWork });
+  if (call.strengthMobility?.trim())
+    rows.push({ label: 'Strength / mobility', value: call.strengthMobility });
+  if (call.fuel?.trim()) rows.push({ label: 'Fuel + hydration', value: call.fuel });
+  return (
+    <>
+      {rows.length ? (
+        <dl className="space-y-2 text-sm leading-6 text-muted">
+          {rows.map((r) => (
+            <div key={r.label}>
+              <dt className="text-xs uppercase tracking-[0.18em] text-brand2">{r.label}</dt>
+              <dd className="mt-1 text-white">{r.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+      {call.rationale?.trim() ? (
+        <p className="mt-3 border-t border-white/5 pt-3 text-xs leading-6 text-muted">
+          <span className="uppercase tracking-[0.18em] text-brand2/80">Why this </span>·{' '}
+          {call.rationale}
+        </p>
+      ) : null}
+      {!call.llmInvoked ? (
+        <p className="mt-1 text-xs text-amber-300/80">
+          Deterministic fallback — LLM composer was unavailable for this call.
+        </p>
+      ) : null}
+    </>
+  );
 }
 
 /**
@@ -150,19 +197,38 @@ export function CoachChat(props: CoachChatProps) {
         </Card>
       ) : null}
 
-      <Card className="space-y-2">
-        <p className="eyebrow">
-          Today&apos;s call · {props.day} {props.today}
-        </p>
-        {props.plannedSession ? (
+      <Card className="space-y-3">
+        <div>
+          <p className="eyebrow">
+            Today&apos;s call · {props.day} {props.today}
+          </p>
+          {props.todaysCall?.phaseContext ? (
+            <p className="mt-1 text-xs uppercase tracking-[0.18em] text-brand2/80">
+              {props.todaysCall.phaseContext}
+            </p>
+          ) : null}
+        </div>
+
+        {props.todaysCall ? (
           <>
-            <h2 className="mt-2 text-2xl font-semibold text-white">
+            <h2 className="text-2xl font-semibold text-white">{props.todaysCall.headline}</h2>
+            <TodaysCallBody call={props.todaysCall} />
+          </>
+        ) : props.plannedSession ? (
+          // Fallback when the LLM composer was unavailable (env missing,
+          // network failure). Renders the plan's weekly-structure entry
+          // verbatim so the athlete sees something useful regardless.
+          <>
+            <h2 className="text-2xl font-semibold text-white">
               {props.plannedSession.runSession || 'Session planned for today'}
             </h2>
             <PlannedSessionDetails session={props.plannedSession} />
+            <p className="mt-2 text-xs text-amber-300/80">
+              Live composer unavailable — showing your plan template.
+            </p>
           </>
         ) : (
-          <h2 className="mt-2 text-2xl font-semibold text-white">
+          <h2 className="text-2xl font-semibold text-white">
             No session planned for {props.day} in your active plan.
           </h2>
         )}

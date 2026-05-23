@@ -387,6 +387,53 @@ Three sections, top-to-bottom:
    and gets the `brand2` border; race week is marked. Static render
    from `view.phaseBlocks` — no client JS, no extra DB query.
 
+### Today's Call composition (`/coach`)
+The "Today's Call" card on `/coach` is **proactively composed by the
+LLM on page load** — not the chat coach (that's reactive). Distinct
+single-call composer in `lib/agents/todays-call.ts` with structured
+JSON output (`response_format: { type: 'json_object' }`) so the UI
+can render labeled fields rather than parsing free-form prose.
+
+**Shape** (`TodaysCall`):
+- `headline` — one-line workout title
+- `runSession` — Long Run / Quality / Aerobic Run / Vert / Recovery / Rest
+- `details`, `exactWork`, `strengthMobility`, `fuel` — labeled body rows
+- `rationale` — 1-2 sentences citing recent data + phase
+- `phaseContext` — computed server-side via `computePhasePosition` so
+  the LLM can't get it wrong. Diagnostic if it looks wrong.
+- `composedAt` ISO timestamp, `llmInvoked` boolean (false → fallback)
+
+**Cache.** Composed call lives in
+`daily_summaries.summary.todaysCall`, keyed by (athlete, day). First
+`/coach` load of the day composes fresh and persists; subsequent
+same-day loads read from cache. Helpers:
+`loadCachedTodaysCall` / `saveCachedTodaysCall` / `invalidateCachedTodaysCall`
+in `lib/agents/todays-call-cache.ts`.
+
+**Invalidation.** `persistTrainingCoachRun` strips the cached
+`todaysCall` key on every chat turn — the conversation context shifts
+(injury report, recovery report, "I'm handling more than the plan"),
+so the next `/coach` load recomposes against the new state. Day
+rollover invalidates automatically because the cache key is
+`(user_id, day)`.
+
+**Fallback chain.**
+1. Cache hit → render the prior composition.
+2. Cache miss + LLM env present → composer runs (tool-calling loop
+   over the same `COACH_TOOL_DEFINITIONS` registry as chat coach).
+3. Env missing OR LLM failure → deterministic fallback: renders the
+   plan's weekly-structure entry for today + engine-adapted
+   recommendation, marks `llmInvoked: false`. Athletes never see a
+   broken card.
+4. No plan → composer returns null; page renders the "upload a plan"
+   CTA path.
+
+**Prompt design.** Distinct from the chat coach prompt — purpose is
+*compose today's workout*, not *converse*. System prompt enforces
+strict JSON output, references real data (`getRecentWorkouts`,
+`runAdaptiveEngine`, etc. via tool calls), honors phase / posture /
+follow-up window / longevity context. See `lib/agents/todays-call.ts::buildSystemPrompt`.
+
 ### Coaching posture (goal-aware)
 The engine and the LLM both tune their aggressiveness to the athlete's
 stated goal. Three postures, defined in `apps/web/lib/training-plan/posture.ts`:
@@ -686,7 +733,43 @@ Failure is logged and non-fatal — the next sync re-tries.
     `training-coach-prompt.test.ts` with soul-injection anchors.
 - **Plan doc:** `docs/plans/2026-05-23-account-page-and-souls.md`.
 
-### 8. Plan docs index (existing)
+### 8. LLM-composed Today's Call — done (2026-05-23)
+- **Problem.** The `/coach` "Today's Call" card was rendering the
+  plan's static weekly-structure template ("Long Run, 2.5-3 hrs
+  building toward 4-5 hrs"). Generic — didn't read phase position,
+  prescribed week from `phaseBlocks`, recent workouts, recovery, or
+  posture. Same call for an athlete in week 5 of Build with degrading
+  Oura readiness as for one in week 1 of Foundation with fresh legs.
+- **Fix shipped:**
+  - New `lib/agents/todays-call.ts` — `composeTodaysCall(ctx, supabase)`
+    runs a purpose-built single-call LLM composer with strict JSON
+    output. Tool access via the same `COACH_TOOL_DEFINITIONS` so the
+    LLM can call `runAdaptiveEngine`, `getRecentWorkouts`,
+    `getInjuryHistory` for deeper context. Deterministic fallback
+    when env missing / LLM fails.
+  - `lib/agents/todays-call-cache.ts` — `loadCachedTodaysCall`,
+    `saveCachedTodaysCall`, `invalidateCachedTodaysCall` wrap the
+    `daily_summaries.summary.todaysCall` JSON key. First /coach load
+    composes fresh + caches; same-day reloads read from cache.
+  - Chat-turn invalidation: `persistTrainingCoachRun` strips
+    `todaysCall` whenever it persists a new turn so the next /coach
+    load recomposes with the new conversation context.
+  - `/coach` page renders the structured fields (`headline`, `details`,
+    `exactWork`, `strengthMobility`, `fuel`, `rationale`,
+    `phaseContext`). Falls back to plan template render when
+    `todaysCall` is null.
+  - `phaseContext` is computed server-side via `computePhasePosition`
+    so it's diagnostic — if the line looks wrong, the issue is in
+    the plan's phaseBlocks, not the LLM.
+  - Tests: `tests/todays-call.test.ts` (no-plan + env-missing
+    fallback paths + phase context), extended
+    `tests/coach-page-data.test.ts` with cache hit / miss / compose
+    failure / composer throws, extended
+    `tests/training-coach-persistence.test.ts` with cache
+    invalidation on chat turns.
+- **Plan doc:** `docs/plans/2026-05-23-llm-todays-call.md`.
+
+### 9. Plan docs index (existing)
 - `docs/plans/2026-05-04-training-import-and-adaptive-coach.md`
 - `docs/plans/2026-05-05-iphone-first-app-mvp.md`
 - `docs/plans/2026-05-07-production-deployment-and-ios-backend.md`
@@ -695,6 +778,7 @@ Failure is logged and non-fatal — the next sync re-tries.
 - `docs/plans/2026-05-22-strava-integration.md`
 - `docs/plans/2026-05-23-onboarding-and-plan-creation.md`
 - `docs/plans/2026-05-23-account-page-and-souls.md`
+- `docs/plans/2026-05-23-llm-todays-call.md`
 - `docs/deploy.md` — in-repo deployment guide (env matrix, Vercel
   recipe, post-deploy steps).
 

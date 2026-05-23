@@ -1,6 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { loadActiveTrainingPlan } from '@/app/plan/coach-data';
+import { loadAthleteContext } from '@/lib/agents/athlete-context';
+import { composeTodaysCall, type TodaysCall } from '@/lib/agents/todays-call';
+import {
+  loadCachedTodaysCall,
+  saveCachedTodaysCall,
+} from '@/lib/agents/todays-call-cache';
 import type {
   CoachConversationMessage,
   CoachFollowUp,
@@ -44,6 +50,15 @@ export type CoachPageState =
        * conversation, since the chat may be unrelated to today.
        */
       plannedSession: WeeklyStructureSession | null;
+      /**
+       * LLM-composed structured workout call for today. Cached in
+       * daily_summaries.summary.todaysCall per athlete + day; first
+       * load of the day composes fresh, subsequent same-day loads
+       * read from cache. Null when athlete has no plan OR both the
+       * LLM and the deterministic fallback failed (rare). The page
+       * falls back to rendering `plannedSession` when null.
+       */
+      todaysCall: TodaysCall | null;
       conversation: CoachConversationMessage[];
       followUp: CoachFollowUp | null;
     };
@@ -115,6 +130,29 @@ export async function loadCoachPageState(args?: { today?: string }): Promise<Coa
     const summaryBlob = (summary?.summary ?? {}) as Record<string, unknown>;
     const planName = await loadPlanName(supabase, user.id);
 
+    // Today's Call composition. Cached per (athlete, day):
+    //   - Cache hit → render the prior composition (fast, free).
+    //   - Cache miss → load full AthleteContext, compose via LLM,
+    //     write the result back to cache, render it.
+    //   - Compose returns null only when there's no plan (already
+    //     handled above) or both LLM + fallback failed.
+    // Errors here are non-fatal — coach page falls back to plannedSession.
+    let todaysCall: TodaysCall | null = null;
+    try {
+      const cached = await loadCachedTodaysCall(supabase, { userId: user.id, today });
+      if (cached) {
+        todaysCall = cached;
+      } else {
+        const ctx = await loadAthleteContext(supabase, user.id, { today });
+        todaysCall = await composeTodaysCall({ ctx, supabase });
+        if (todaysCall) {
+          await saveCachedTodaysCall(supabase, { userId: user.id, today, call: todaysCall });
+        }
+      }
+    } catch (err) {
+      console.error('[coach] composeTodaysCall failed:', err instanceof Error ? err.message : err);
+    }
+
     return {
       kind: 'ready',
       userId: user.id,
@@ -125,6 +163,7 @@ export async function loadCoachPageState(args?: { today?: string }): Promise<Coa
       today,
       day,
       plannedSession,
+      todaysCall,
       conversation: (summaryBlob.coachConversation as CoachConversationMessage[] | undefined) ?? [],
       followUp: (summaryBlob.coachFollowUp as CoachFollowUp | null | undefined) ?? null,
     };

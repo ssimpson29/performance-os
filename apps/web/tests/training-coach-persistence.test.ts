@@ -152,6 +152,53 @@ describe('persistTrainingCoachRun', () => {
       persistTrainingCoachRun(supabase, { userId: 'user-1', today: '2026-05-21', output: sampleOutput() }),
     ).rejects.toThrow(/permission denied/);
   });
+
+  it('strips cached todaysCall when persisting a chat turn (forces recompose next /coach load)', async () => {
+    const cachedTodaysCall = {
+      headline: 'Stale call from earlier',
+      runSession: 'Long Run',
+      details: 'stale',
+      exactWork: 'stale',
+      strengthMobility: 'stale',
+      fuel: 'stale',
+      rationale: 'stale',
+      phaseContext: 'stale',
+      composedAt: '2026-05-21T06:00:00Z',
+      llmInvoked: true,
+    };
+    const { supabase, calls } = buildFakeSupabase({
+      existingSummaryRow: {
+        id: 'existing-id',
+        summary: {
+          longevityContext: { recoveryPriority: 'normal' },
+          todaysCall: cachedTodaysCall,
+          someOtherKey: 'preserved',
+        },
+        training_recommendation: 'old value',
+      },
+    });
+
+    const output = sampleOutput();
+    output.injurySignal = { detected: false, rationale: 'no injury' };
+
+    await persistTrainingCoachRun(supabase, {
+      userId: 'user-1',
+      today: '2026-05-21',
+      output,
+    });
+
+    const updateCall = calls.find((c) => c.table === 'daily_summaries' && c.method === 'update');
+    expect(updateCall).toBeDefined();
+    const payload = updateCall!.payload as { summary: Record<string, unknown> };
+    // todaysCall must be stripped so /coach recomposes with the new
+    // conversation context (injury report, recovery report, etc.).
+    expect(payload.summary.todaysCall).toBeUndefined();
+    // Other keys MUST be preserved.
+    expect(payload.summary.longevityContext).toEqual({ recoveryPriority: 'normal' });
+    expect(payload.summary.someOtherKey).toBe('preserved');
+    // Coach-conversation keys still updated normally.
+    expect(payload.summary.coachConversation).toHaveLength(2);
+  });
 });
 
 describe('loadTrainingCoachState', () => {
