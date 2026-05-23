@@ -1,7 +1,13 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+
+import {
+  clearOnboardingDraft,
+  loadOnboardingDraft,
+  saveOnboardingDraft,
+} from '@/lib/onboarding/draft-storage';
 
 /**
  * Five-step onboarding form. Step state is local-only (no auto-save
@@ -400,36 +406,48 @@ function Step4Goal({ state, setState }: StepProps) {
 }
 
 function Step5Connect() {
+  // target="_blank" so clicking these opens /settings/integrations in
+  // a NEW tab. Keeps the onboarding tab open with its React state
+  // intact — without this the connection click was full-navigating
+  // away and the form was re-mounting at Step 1 when the athlete
+  // came back. (sessionStorage persistence below is the belt-and-
+  // -suspenders backup if they close the original tab.)
   return (
     <div className="space-y-4">
       <p className="text-sm leading-6 text-muted">
-        The coach reads workouts from Apple Health and Strava, recovery from Oura, and labs you upload directly. Connect what you have — you can do the rest later from Settings → Integrations.
+        The coach reads workouts from Apple Health and Strava, recovery from Oura, and labs you upload directly. Connect what you have — or skip and do it later from Settings → Integrations.
       </p>
       <div className="grid gap-3 md:grid-cols-3">
         <a
           href="/settings/integrations"
+          target="_blank"
+          rel="noopener noreferrer"
           className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 hover:border-brand2/60"
         >
           <p className="text-xs uppercase tracking-[0.18em] text-brand2">Strava</p>
-          <p className="mt-1 text-sm text-white">Connect →</p>
+          <p className="mt-1 text-sm text-white">Connect (opens new tab) →</p>
         </a>
         <a
           href="/settings/integrations"
+          target="_blank"
+          rel="noopener noreferrer"
           className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 hover:border-brand2/60"
         >
           <p className="text-xs uppercase tracking-[0.18em] text-brand2">Apple Health</p>
-          <p className="mt-1 text-sm text-white">Get signed URL →</p>
+          <p className="mt-1 text-sm text-white">Get signed URL (new tab) →</p>
         </a>
         <a
           href="/settings/integrations"
+          target="_blank"
+          rel="noopener noreferrer"
           className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 hover:border-brand2/60"
         >
           <p className="text-xs uppercase tracking-[0.18em] text-brand2">Oura</p>
-          <p className="mt-1 text-sm text-white">Connect →</p>
+          <p className="mt-1 text-sm text-white">Connect (new tab) →</p>
         </a>
       </div>
       <p className="text-xs text-muted">
-        These open in this same tab. Use the back button if you want to come back and finish onboarding without setting one up yet.
+        Connections open in a new tab so this onboarding stays put. You can also skip this step and connect later — hit Finish onboarding when you&apos;re ready.
       </p>
     </div>
   );
@@ -451,10 +469,38 @@ export function OnboardingFlow({
   initialEmail: string;
 }) {
   const router = useRouter();
+  // useState initializer can't read sessionStorage during SSR (no window),
+  // so we hydrate from storage in a post-mount effect below. Default values
+  // serve the first render; the effect overrides them on the client if a
+  // persisted draft exists. Avoids hydration mismatches.
   const [state, setState] = useState<FormState>(() => defaultState(initialDisplayName));
   const [stepIndex, setStepIndex] = useState(0);
   const [status, setStatus] = useState<'idle' | 'submitting' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // Hydration flag so we don't overwrite a freshly-rehydrated state with
+  // the initial default in the persistence effect that follows.
+  const [hydrated, setHydrated] = useState(false);
+
+  // Hydrate from sessionStorage once on mount. Helper handles SSR,
+  // disabled storage, malformed JSON — see lib/onboarding/draft-storage.ts.
+  useEffect(() => {
+    const draft = loadOnboardingDraft(STEPS.length);
+    if (draft) {
+      // Merge stored state with defaults so any keys added since the draft
+      // was saved still get default values rather than undefined.
+      setState((prev) => ({ ...prev, ...(draft.state as Partial<FormState>) }));
+      setStepIndex(draft.stepIndex);
+    }
+    setHydrated(true);
+  }, []);
+
+  // Persist state + step to sessionStorage on every change AFTER hydration.
+  // Skipping pre-hydration writes prevents the initial defaults from
+  // stomping a stored draft before the hydration effect runs.
+  useEffect(() => {
+    if (!hydrated) return;
+    saveOnboardingDraft(state, stepIndex);
+  }, [state, stepIndex, hydrated]);
 
   const isLast = stepIndex === STEPS.length - 1;
   const isFirst = stepIndex === 0;
@@ -514,8 +560,10 @@ export function OnboardingFlow({
         return;
       }
       // Stash race seed in sessionStorage so /coach can read it on mount
-      // and offer the first plan-creation prompt. Falls back to a plain
-      // redirect when no seed.
+      // and offer the first plan-creation prompt. Then wipe the
+      // in-progress onboarding draft now that it's been persisted to
+      // the DB — next time this athlete (or another on the same
+      // browser) lands at /onboarding, they should start fresh.
       try {
         if (data.raceSeed) {
           sessionStorage.setItem('onboarding.raceSeed', JSON.stringify(data.raceSeed));
@@ -525,6 +573,7 @@ export function OnboardingFlow({
       } catch {
         /* sessionStorage unavailable — coach can still ask conversationally */
       }
+      clearOnboardingDraft();
       router.push('/coach');
     } catch (err) {
       setStatus('error');
