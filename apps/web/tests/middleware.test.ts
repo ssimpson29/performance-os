@@ -96,8 +96,12 @@ describe('middleware — onboarding gate', () => {
     '/onboarding/anything',
     '/account',                   // athlete must be able to view + edit profile + sign out
     '/account/something',
+    '/settings',                  // settings root — must be reachable mid-onboarding
+    '/settings/integrations',     // Step 5 of onboarding links here in a new tab
+    '/settings/anything-else',
     '/api/onboarding/complete',   // the completion endpoint itself
     '/api/coach/message',
+    '/api/imports/strava/connect',// OAuth kick-off — must work mid-onboarding
     '/auth/callback',
     '/docs',
     '/docs/anything',

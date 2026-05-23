@@ -85,7 +85,13 @@ export async function middleware(request: NextRequest) {
  *   - /account (the athlete should always be able to view + edit their
  *     own profile state, even mid-onboarding, and use the sign-out
  *     button regardless of onboarding completion)
- *   - /api/* (server endpoints — including /api/onboarding/complete)
+ *   - /settings/* (Step 5 of onboarding asks the athlete to connect
+ *     integrations; the connection cards open /settings/integrations
+ *     in a new tab — that tab MUST be reachable, or onboarding boots
+ *     them back at themselves and they can never wire up Strava /
+ *     Apple Health / Oura while mid-onboarding)
+ *   - /api/* (server endpoints — including /api/onboarding/complete
+ *     AND /api/imports/strava/connect which kicks off OAuth)
  *   - /auth/* (magic-link callback completes auth before profile exists)
  *   - /docs (public marketing-ish surface)
  *   - / (the marketing landing page — fine to view signed-in)
@@ -94,6 +100,7 @@ function shouldEnforceOnboardingGate(pathname: string): boolean {
   if (pathname === '/' || pathname === '/onboarding' || pathname === '/account') return false;
   if (pathname.startsWith('/onboarding/')) return false;
   if (pathname.startsWith('/account/')) return false;
+  if (pathname.startsWith('/settings/') || pathname === '/settings') return false;
   if (pathname.startsWith('/api/')) return false;
   if (pathname.startsWith('/auth/')) return false;
   if (pathname.startsWith('/docs')) return false;
