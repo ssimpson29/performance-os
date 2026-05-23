@@ -50,17 +50,24 @@ export default async function AccountPage() {
   }
 
   const supabase = createServerSupabaseClient();
+  // Capture userId in the outer scope BEFORE any closures use it.
+  // TypeScript's control-flow narrowing of `user` to non-null (after
+  // the early-return guard above) doesn't propagate into nested
+  // function closures, so a closure that reads `user.id` directly
+  // errors with "user is possibly null." Stashing the id here sidesteps
+  // it cleanly without `!` assertions.
+  const userId = user.id;
 
   // Profile load is required (users table is from migration 002 — every
   // environment has it). Soul loads are wrapped defensively because
   // migration 010 (athlete_souls) might not be applied yet — when that's
   // the case we'd rather render the form with empty souls than crash
   // the whole /account route.
-  const profile = await loadAthleteProfile(supabase, user.id);
+  const profile = await loadAthleteProfile(supabase, userId);
 
   function fallbackSoul(kind: 'training' | 'longevity') {
     return {
-      userId: user.id,
+      userId,
       kind,
       content: '',
       updatedBy: 'athlete' as const,
@@ -69,8 +76,8 @@ export default async function AccountPage() {
   }
 
   const [trainingSoulResult, longevitySoulResult] = await Promise.allSettled([
-    loadSoul(supabase, user.id, 'training'),
-    loadSoul(supabase, user.id, 'longevity'),
+    loadSoul(supabase, userId, 'training'),
+    loadSoul(supabase, userId, 'longevity'),
   ]);
   const trainingSoul =
     trainingSoulResult.status === 'fulfilled'
