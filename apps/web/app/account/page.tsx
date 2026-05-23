@@ -50,11 +50,38 @@ export default async function AccountPage() {
   }
 
   const supabase = createServerSupabaseClient();
-  const [profile, trainingSoul, longevitySoul] = await Promise.all([
-    loadAthleteProfile(supabase, user.id),
+
+  // Profile load is required (users table is from migration 002 — every
+  // environment has it). Soul loads are wrapped defensively because
+  // migration 010 (athlete_souls) might not be applied yet — when that's
+  // the case we'd rather render the form with empty souls than crash
+  // the whole /account route.
+  const profile = await loadAthleteProfile(supabase, user.id);
+
+  function fallbackSoul(kind: 'training' | 'longevity') {
+    return {
+      userId: user.id,
+      kind,
+      content: '',
+      updatedBy: 'athlete' as const,
+      updatedAt: null,
+    };
+  }
+
+  const [trainingSoulResult, longevitySoulResult] = await Promise.allSettled([
     loadSoul(supabase, user.id, 'training'),
     loadSoul(supabase, user.id, 'longevity'),
   ]);
+  const trainingSoul =
+    trainingSoulResult.status === 'fulfilled'
+      ? trainingSoulResult.value
+      : (console.error('[account] training soul load failed:', trainingSoulResult.reason),
+        fallbackSoul('training'));
+  const longevitySoul =
+    longevitySoulResult.status === 'fulfilled'
+      ? longevitySoulResult.value
+      : (console.error('[account] longevity soul load failed:', longevitySoulResult.reason),
+        fallbackSoul('longevity'));
 
   return (
     <main>

@@ -298,6 +298,25 @@ export async function loadAthleteContext(
   const workoutLookback = options.workoutLookbackDays ?? DEFAULT_WORKOUT_LOOKBACK_DAYS;
   const injuryLookback = options.injuryLookbackDays ?? DEFAULT_INJURY_LOOKBACK_DAYS;
 
+  // Soul loads can fail when migration 010 (athlete_souls) hasn't been
+  // applied to an environment — relation-does-not-exist throws from
+  // loadSoul. Wrap them so the missing table degrades to empty souls
+  // and the coach still works. Everything else throws normally.
+  async function safeLoadSoul(kind: 'training' | 'longevity'): Promise<AthleteSoul> {
+    try {
+      return await loadSoul(supabase, userId, kind);
+    } catch (err) {
+      console.error(`[athlete-context] ${kind} soul load failed:`, err);
+      return {
+        userId,
+        kind,
+        content: '',
+        updatedBy: 'athlete',
+        updatedAt: null,
+      };
+    }
+  }
+
   // Run the independent loads in parallel.
   const [
     profile,
@@ -319,8 +338,8 @@ export async function loadAthleteContext(
     loadLatestBiomarkers(supabase, userId),
     loadLongevityContextForAthlete(supabase, userId, today),
     loadCoachConversation(supabase, userId, today),
-    loadSoul(supabase, userId, 'training'),
-    loadSoul(supabase, userId, 'longevity'),
+    safeLoadSoul('training'),
+    safeLoadSoul('longevity'),
   ]);
 
   const longevityContext: LongevityContextSummary | null = longevityRaw
