@@ -382,6 +382,10 @@ const SUBSTRING_ALIASES: Record<string, string> = {
   'high-sensitivity c-reactive protein': 'hs_crp',
   'high sensitivity crp': 'hs_crp',
   'total testosterone': 'total_testosterone',
+  // 'vitamin d' is short (9 chars) but unique — keep it substring-eligible
+  // so "Vitamin D, 25-Hydroxy" etc. resolves cleanly. The exact-alias
+  // map also has it (for bare "vitamin d") but exact lookup runs first.
+  'vitamin d': 'vitamin_d',
   '25-hydroxy vitamin d': 'vitamin_d',
   'vitamin d, 25-hydroxy': 'vitamin_d',
   'omega-3 index': 'omega_3_index',

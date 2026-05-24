@@ -97,7 +97,11 @@ describe('composeTodaysCall', () => {
   });
 
   it('returns deterministic fallback when AI_COACH_* env is missing', async () => {
-    const ctx = makeCtx();
+    // 2026-02-07 is Saturday in week 0 of the 2-week foundation fixture
+    // — inside the phase, so phaseContext should name it. (The default
+    // makeCtx today is 2026-05-23, which is 16 weeks past plan start
+    // and outside any defined phase — different assertion test below.)
+    const ctx = makeCtx({ today: '2026-02-07' });
     const call = await composeTodaysCall({ ctx, supabase: stubSupabase });
     expect(call).not.toBeNull();
     if (!call) return;

@@ -34,7 +34,10 @@ describe('matchRawNameToCatalogKey', () => {
   });
 
   it('returns null for unrelated names', () => {
-    expect(matchRawNameToCatalogKey('Sodium')).toBeNull();
+    // Sodium used to be unmatched; it's now in the catalog after the CMP
+    // expansion. Use markers that are genuinely outside the catalog —
+    // exotic / niche / made-up names that no lab would print.
+    expect(matchRawNameToCatalogKey('Coenzyme Q10')).toBeNull();
     expect(matchRawNameToCatalogKey('Random unknown marker')).toBeNull();
   });
 

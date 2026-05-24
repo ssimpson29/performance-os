@@ -8,6 +8,11 @@ vi.mock('@/lib/server-auth', () => ({ getAuthenticatedUserId }));
 vi.mock('@/lib/longevity/image-extraction', () => ({
   extractPanelFromImage,
   matchRawNameToCatalogKey,
+  // Stub unitsEquivalent with a real-ish implementation so the route's
+  // unit-match warning branch still triggers when units actually differ
+  // ('mmol/L' vs 'mg/dL'). The route uses unitsEquivalent now; without
+  // this export, the mocked module is incomplete and route imports throw.
+  unitsEquivalent: (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase(),
 }));
 
 function makeRequest(file: File | null) {
