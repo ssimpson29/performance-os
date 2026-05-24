@@ -1,5 +1,6 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
 import { Card } from '@/components/ui/card';
@@ -119,6 +120,7 @@ function PlannedSessionDetails({ session }: { session: WeeklyStructureSession })
 }
 
 export function CoachChat(props: CoachChatProps) {
+  const router = useRouter();
   const [conversation, setConversation] = useState<CoachConversationMessage[]>(props.initialConversation);
   const [followUp, setFollowUp] = useState<CoachFollowUp | null>(props.initialFollowUp);
   const [draft, setDraft] = useState('');
@@ -176,6 +178,13 @@ export function CoachChat(props: CoachChatProps) {
       }
       setConversation([]);
       setFollowUp(null);
+
+      // Soft-refresh so the "Today's Call" card recomposes against the
+      // freshly cleared state. The DELETE endpoint already stripped the
+      // cached call; without this refresh the card would still display
+      // whatever it had before the reset, contradicting the now-empty
+      // thread below it.
+      router.refresh();
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : 'Network error');
     } finally {
@@ -219,10 +228,12 @@ export function CoachChat(props: CoachChatProps) {
       // Update follow-up state — it can open/close on any turn.
       setFollowUp(data.followUp ?? null);
 
-      // Append the coach reply to the conversation thread. The reply is
-      // intentionally NOT used to overwrite the "Today's call" headline
-      // — that headline is the planned session for today, not whatever
-      // the coach last said. The chat may be off-topic relative to today.
+      // Append the coach reply to the conversation thread. The reply
+      // shape (`message`) is what the coach SAID in chat — distinct from
+      // the structured Today's Call card that lives in the SSR'd portion
+      // of the page. The chat thread is reactive (athlete asks, coach
+      // answers); the Today's Call card is proactive (composed on page
+      // load against current phase / recovery / posture).
       const coachReply: CoachConversationMessage = {
         role: 'coach',
         text: data.message ?? '',
@@ -230,6 +241,25 @@ export function CoachChat(props: CoachChatProps) {
       };
       setConversation((prior) => [...prior, coachReply]);
       setStatus('idle');
+
+      // Soft-refresh server components so the "Today's Call" card at the
+      // top of the page picks up whatever the chat turn just changed.
+      // `persistTrainingCoachRun` already stripped `summary.todaysCall`
+      // from the cache when this turn landed; the next render is a cache
+      // miss → `composeTodaysCall` runs fresh against the updated
+      // conversation context (new injury report, recovery report,
+      // "I'm handling more than the plan", etc.) and renders the new
+      // call. Without this, the card stays at whatever was composed on
+      // the initial page load and the athlete sees a stale headline
+      // that contradicts what the coach just told them in chat.
+      //
+      // `router.refresh()` is a soft refresh — server components re-render
+      // but client state (this `conversation` useState, the draft input,
+      // scroll position) is preserved. The page passes a new
+      // `initialConversation` prop down, but useState ignores prop
+      // changes after mount, so the optimistic + server-confirmed thread
+      // we just built stays intact.
+      router.refresh();
     } catch (err) {
       setStatus('error');
       setErrorMessage(err instanceof Error ? err.message : 'Network error');
