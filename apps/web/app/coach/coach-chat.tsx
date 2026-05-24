@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { Card } from '@/components/ui/card';
 import type { TodaysCall } from '@/lib/agents/todays-call';
@@ -124,9 +124,64 @@ export function CoachChat(props: CoachChatProps) {
   const [draft, setDraft] = useState('');
   const [status, setStatus] = useState<'idle' | 'sending' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [resetting, setResetting] = useState(false);
 
   const sending = status === 'sending';
   const followUpActive = followUp?.status === 'active';
+
+  // Auto-scroll the conversation thread to the bottom. Default browser
+  // behavior on page reload leaves a scrollable div at scrollTop=0, so a
+  // long history dumped the athlete at the very first message — they had
+  // to scroll all the way down every refresh. Two effects:
+  //  1. Mount → jump to bottom (no animation, just be at the latest).
+  //  2. conversation.length change → smooth-scroll so a new reply
+  //     visibly appears at the bottom instead of silently appending
+  //     below the visible area.
+  const threadRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = threadRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    // Empty dep array — mount only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    const el = threadRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+  }, [conversation.length]);
+
+  /**
+   * Start fresh — clears today's coach conversation, follow-up window,
+   * and cached Today's Call so the next compose runs against a clean
+   * slate. Souls survive (durable memory by design — see CLAUDE.md
+   * "Athlete souls"). Confirms before destroying state.
+   */
+  async function handleStartFresh() {
+    if (resetting || sending) return;
+    if (typeof window !== 'undefined') {
+      const ok = window.confirm(
+        "Start a fresh conversation with the coach for today? Today's Call will recompose, and the easy-through window (if any) clears. Your training soul / saved facts are kept.",
+      );
+      if (!ok) return;
+    }
+    setResetting(true);
+    setErrorMessage(null);
+    try {
+      const response = await fetch('/api/coach/conversation', { method: 'DELETE' });
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as { error?: string } | null;
+        setErrorMessage(data?.error ?? `Reset failed (${response.status})`);
+        return;
+      }
+      setConversation([]);
+      setFollowUp(null);
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setResetting(false);
+    }
+  }
 
   async function handleSend(event: React.FormEvent) {
     event.preventDefault();
@@ -235,15 +290,28 @@ export function CoachChat(props: CoachChatProps) {
       </Card>
 
       <Card className="space-y-4">
-        <div>
-          <p className="eyebrow">Conversation</p>
-          <h2 className="mt-2 text-xl font-semibold text-white">Tell the coach what&apos;s going on.</h2>
-          <p className="mt-2 text-sm leading-6 text-muted">
-            Mention strain or pain and the coach will set an easy-through window automatically. Say &ldquo;pain free&rdquo; or &ldquo;back to normal&rdquo; on a follow-up to close it.
-          </p>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="eyebrow">Conversation</p>
+            <h2 className="mt-2 text-xl font-semibold text-white">Tell the coach what&apos;s going on.</h2>
+            <p className="mt-2 text-sm leading-6 text-muted">
+              Mention strain or pain and the coach will set an easy-through window automatically. Say &ldquo;pain free&rdquo; or &ldquo;back to normal&rdquo; on a follow-up to close it.
+            </p>
+          </div>
+          {conversation.length > 0 ? (
+            <button
+              type="button"
+              onClick={handleStartFresh}
+              disabled={resetting || sending}
+              className="shrink-0 rounded-full border border-white/15 px-3 py-1.5 text-xs uppercase tracking-[0.18em] text-muted transition hover:border-brand2/40 hover:text-brand2 disabled:opacity-50"
+              title="Clear today's conversation. Souls / saved facts survive."
+            >
+              {resetting ? 'Clearing…' : 'Start fresh'}
+            </button>
+          ) : null}
         </div>
 
-        <div className="space-y-3 max-h-[420px] overflow-y-auto pr-2" aria-live="polite">
+        <div ref={threadRef} className="space-y-3 max-h-[420px] overflow-y-auto pr-2" aria-live="polite">
           {conversation.length === 0 ? (
             <p className="text-sm italic text-muted">No conversation yet today.</p>
           ) : (
