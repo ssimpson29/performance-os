@@ -354,6 +354,33 @@ export default async function PlanPage() {
             <p className="mt-2 text-sm leading-6 text-muted">
               Your full training plan, week by week. Today&apos;s week is highlighted; race week is marked. Deload weeks carry a tag.
             </p>
+            {(() => {
+              // Diagnostic: plan length vs. time-to-race. Phase position is
+              // race-anchored (see computePhasePosition) so race week always
+              // lands on the plan's last week, regardless of planStartDate.
+              // This line explains *why* the highlighted week is where it is:
+              // - plan length ≈ weeks-to-race + 1 → plan was sized to fit, no shift
+              // - plan length > weeks-to-race + 1 → plan longer than time
+              //   remaining, race anchor skipped early weeks to land in the
+              //   correct phase (the common case for an imported 24-week
+              //   workbook with race in 10 weeks)
+              // - plan length < weeks-to-race + 1 → plan shorter than time
+                //   remaining, current week clamped to 0 (rare)
+              const totalPlanWeeks = view.phaseBlocks.reduce((n, b) => n + b.weeks.length, 0);
+              const weeksToRace = view.adaptive.phasePosition?.weeksToRace ?? null;
+              if (weeksToRace == null || totalPlanWeeks === 0) return null;
+              const expectedWeeks = weeksToRace + 1; // +1 because race week itself counts
+              const diff = totalPlanWeeks - expectedWeeks;
+              const shiftNote =
+                diff > 1 ? ` · plan is ${diff} weeks longer than time remaining — current week shifted forward to fit` :
+                diff < -1 ? ` · plan is ${-diff} weeks shorter than time remaining — pinned to week 1` :
+                '';
+              return (
+                <p className="mt-2 text-xs uppercase tracking-[0.18em] text-brand2/80">
+                  Plan: {totalPlanWeeks} weeks · Race: {weeksToRace} {weeksToRace === 1 ? 'week' : 'weeks'} away · anchored from race date{shiftNote}
+                </p>
+              );
+            })()}
           </div>
           <div className="space-y-6">
             {view.phaseBlocks.map((block, phaseIdx) => {

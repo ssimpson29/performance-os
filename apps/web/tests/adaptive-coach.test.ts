@@ -194,6 +194,86 @@ describe('computePhasePosition', () => {
     });
     expect(pos).toBeNull();
   });
+
+  // ---------------------------------------------------------------------------
+  // Race-anchored phase position — the bug Scott hit (24-week plan uploaded
+  // with planStartDate = today, race only 10 weeks away → coach thought he
+  // was in Phase 1 Week 1 instead of mid-build). Race-anchoring means race
+  // week always lands on the plan's last week; the current week walks
+  // backward from there. planStartDate becomes cosmetic for phase math.
+  // ---------------------------------------------------------------------------
+
+  it('race-anchors the current week when planStartDate disagrees with time-to-race', () => {
+    // Same 27-week phaseBlocks fixture. Race is 2026-08-07. Today is
+    // 2026-05-24 → 75 days = 10 whole weeks to race. If the workbook was
+    // uploaded today with planStartDate = today, the legacy start-anchored
+    // formula would give totalWeekIndex = 0 (Phase 1). Race-anchored gives
+    // lastWeekIndex(26) − weeksToRace(10) = 16. Phase walk:
+    //   0–7   FOUNDATION BUILD
+    //   8–17  SPECIFIC LOAD BUILD  ← week 16 lands here, index 8 in
+    //   18–22 PEAK SPECIFICITY
+    //   23–25 TAPER
+    //   26    Race Week
+    const pos = computePhasePosition({
+      today: '2026-05-24',
+      planStartDate: '2026-05-24', // stamped at upload — wrong for a 24-week plan with race in 10 weeks
+      raceDate: '2026-08-07',
+      phaseBlocks,
+    });
+    expect(pos?.totalWeekIndex).toBe(16);
+    expect(pos?.phaseName).toMatch(/SPECIFIC LOAD BUILD/i);
+    expect(pos?.phaseIndex).toBe(1);
+    expect(pos?.weekIndexInPhase).toBe(8); // 16 - 8
+    expect(pos?.weeksToRace).toBe(10);
+    expect(pos?.isRaceWeek).toBe(false);
+    expect(pos?.isTaper).toBe(false);
+  });
+
+  it('still places race week on the plan last week regardless of planStartDate', () => {
+    // Plan was uploaded today but race is 3 days away. Race anchor pins
+    // current week to totalPlanWeeks - 1 = 26 (Race Week phase).
+    const pos = computePhasePosition({
+      today: '2026-08-04',
+      planStartDate: '2026-08-04',
+      raceDate: '2026-08-07',
+      phaseBlocks,
+    });
+    expect(pos?.totalWeekIndex).toBe(26);
+    expect(pos?.phaseName).toMatch(/Race Week/i);
+    expect(pos?.isRaceWeek).toBe(true);
+    expect(pos?.raiseAllowed).toBe(false);
+  });
+
+  it('clamps to week 0 when the plan is shorter than time remaining', () => {
+    // Edge case: 27-week plan but race is a full year out. weeksToRace=52
+    // would underflow lastWeekIndex (26) - 52 = -26. Clamp to 0 → Phase 1
+    // Week 1. Sensible default; the /plan diagnostic surfaces this state.
+    const pos = computePhasePosition({
+      today: '2026-02-02',
+      planStartDate: '2026-02-02',
+      raceDate: '2027-02-02', // 52 weeks out
+      phaseBlocks,
+    });
+    expect(pos?.totalWeekIndex).toBe(0);
+    expect(pos?.phaseName).toMatch(/FOUNDATION BUILD/i);
+    expect(pos?.weeksToRace).toBeGreaterThan(50);
+    expect(pos?.isRaceWeek).toBe(false);
+  });
+
+  it('agrees with the legacy start-anchored answer when plan was sized to fit', () => {
+    // Sanity: when planStartDate + totalPlanWeeks·7 ≈ raceDate (the standard
+    // generator output), race anchor produces the same totalWeekIndex as the
+    // legacy start anchor would. This is what keeps existing tests above
+    // green — the fixture is intentionally sized-to-fit.
+    const pos = computePhasePosition({
+      today: '2026-04-13', // 10 weeks after 2026-02-02 plan start
+      planStartDate: '2026-02-02',
+      raceDate: '2026-08-07', // ~27 weeks after plan start
+      phaseBlocks,
+    });
+    expect(pos?.totalWeekIndex).toBe(10);
+    expect(pos?.phaseName).toMatch(/SPECIFIC LOAD BUILD/i);
+  });
 });
 
 // ---------------------------------------------------------------------------

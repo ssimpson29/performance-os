@@ -40,6 +40,28 @@ function diffWholeDays(a: Date, b: Date): number {
  * Compute the athlete's position in the plan given today + plan start + race
  * date + phase blocks. Returns null when any required input is missing or
  * invalid, so the caller can decide to skip race-aware logic.
+ *
+ * Anchoring: **race-anchored**. `totalWeekIndex` is derived from how many
+ * weeks remain until race day, mapped onto the plan's total week count, so
+ * race week always lands on the plan's last week regardless of when the
+ * plan was uploaded or what `planStartDate` was stamped at import time.
+ *
+ * Worked example. A 24-week plan with race in 10.7 weeks → `totalWeekIndex
+ * = 24 − 1 − 10 = 13` (Phase 3 in the standard 5-phase split). The legacy
+ * start-anchored formula (`(today − planStartDate) / 7`) would give 0, which
+ * misclassifies an athlete in the back half of the build as a fresh starter
+ * and silently corrupts every downstream signal — race-week lock, taper
+ * guard, posture gating, Today's Call composer phase context.
+ *
+ * The two formulas agree when the plan was sized to fit the time remaining
+ * at import (`planStartDate + totalPlanWeeks·7 ≈ raceDate`). When they
+ * disagree, race-anchor wins — that's the user's intent.
+ *
+ * `planned_sessions.session_date` is untouched by this — those rows still
+ * anchor to the imported `planStartDate`. Phase position is a separate
+ * concept: where in the *build* the athlete is, not what date is on a row.
+ * `planStartDate` is still required as an input for validation (must parse)
+ * but the race anchor makes its value cosmetic for phase math.
  */
 export function computePhasePosition(input: {
   today: string;
@@ -52,12 +74,26 @@ export function computePhasePosition(input: {
   const race = isoToUtcDate(input.raceDate);
   if (!today || !start || !race) return null;
 
-  const daysSinceStart = diffWholeDays(today, start);
-  const totalWeekIndex = Math.max(0, Math.floor(daysSinceStart / 7));
+  const totalPlanWeeks = input.phaseBlocks.reduce(
+    (sum, block) => sum + block.weeks.length,
+    0,
+  );
 
   const daysToRace = diffWholeDays(race, today);
   const weeksToRace = Math.max(0, Math.floor(daysToRace / 7));
   const isRaceWeek = daysToRace >= 0 && daysToRace < 7;
+
+  // Race-anchored week index. Race week lands on the plan's last week
+  // (totalPlanWeeks − 1). `weeksToRace` counts whole weeks remaining, so
+  // subtracting it from the last index walks backward from race week into
+  // the build. Clamp to [0, totalPlanWeeks − 1] so a plan shorter than
+  // time-to-race stays at week 0 (sensible default; the /plan diagnostic
+  // surfaces this state) and a race already passed pins to the final week.
+  const lastWeekIndex = Math.max(0, totalPlanWeeks - 1);
+  const totalWeekIndex =
+    totalPlanWeeks > 0
+      ? Math.min(lastWeekIndex, Math.max(0, lastWeekIndex - weeksToRace))
+      : 0;
 
   // Walk phase blocks accumulating week counts to find which phase the
   // current totalWeekIndex lands in.
