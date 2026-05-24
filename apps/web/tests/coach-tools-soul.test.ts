@@ -46,6 +46,7 @@ function makeCtx(overrides: Partial<AthleteContext> = {}): AthleteContext {
     longevityContext: null,
     conversation: [],
     followUp: null,
+    longevityConversation: [],
     trainingSoul: baseSoul('training'),
     longevitySoul: baseSoul('longevity'),
     ...overrides,

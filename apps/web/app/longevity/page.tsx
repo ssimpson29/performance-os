@@ -4,6 +4,7 @@ import { PageHero } from '@/components/layout/page-hero';
 import { Card } from '@/components/ui/card';
 
 import { loadLongevityPageState } from './longevity-data';
+import { LongevityChat } from './longevity-chat';
 import { ReevaluateButton } from './reevaluate-button';
 
 export default async function LongevityPage() {
@@ -143,6 +144,8 @@ export default async function LongevityPage() {
                 </ul>
               </Card>
             ) : null}
+
+            <LongevityChat initialConversation={state.longevityConversation} />
           </div>
         ) : null}
       </section>

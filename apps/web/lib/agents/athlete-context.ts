@@ -71,6 +71,16 @@ export type CoachConversationMessageStored = {
   at?: string;
 };
 
+/**
+ * Longevity Guru chat message — mirrors CoachConversationMessageStored
+ * but with 'guru' as the AI-side role for clarity in mixed UIs.
+ */
+export type LongevityConversationMessageStored = {
+  role: 'athlete' | 'guru';
+  text: string;
+  at?: string;
+};
+
 export type CoachFollowUpStored = {
   easyThroughDate: string;
   checkInDate: string;
@@ -104,6 +114,14 @@ export type AthleteContext = {
   conversation: CoachConversationMessageStored[];
   /** Active follow-up window from a prior injury report, if any. */
   followUp: CoachFollowUpStored | null;
+  /**
+   * Last 20 Longevity Guru <-> athlete messages, oldest first. Loaded
+   * from `daily_summaries.summary.longevityConversation` (most recent
+   * row, same pattern as `conversation` above). Both agents see both
+   * conversations — useful when a longevity question intersects with
+   * something the athlete recently told the coach (e.g. injury).
+   */
+  longevityConversation: LongevityConversationMessageStored[];
   /**
    * Durable "soul" memory documents. Read by both LLM agents' system
    * prompts every turn so durable facts about the athlete (preferences,
@@ -232,7 +250,11 @@ async function loadCoachConversation(
   supabase: SupabaseClient,
   userId: string,
   today: string,
-): Promise<{ conversation: CoachConversationMessageStored[]; followUp: CoachFollowUpStored | null }> {
+): Promise<{
+  conversation: CoachConversationMessageStored[];
+  followUp: CoachFollowUpStored | null;
+  longevityConversation: LongevityConversationMessageStored[];
+}> {
   // The coach state lives on daily_summaries.summary for the most recent
   // entry (often today's, but it can be a prior day if today's summary
   // hasn't been written yet).
@@ -246,7 +268,7 @@ async function loadCoachConversation(
 
   if (error) {
     console.error('athlete-context: failed to load coach conversation:', error);
-    return { conversation: [], followUp: null };
+    return { conversation: [], followUp: null, longevityConversation: [] };
   }
   const row = (data ?? [])[0] as { summary?: Record<string, unknown> } | undefined;
   const summary = row?.summary ?? {};
@@ -256,6 +278,21 @@ async function loadCoachConversation(
     ? (rawConv as Array<Record<string, unknown>>)
         .map((m): CoachConversationMessageStored => ({
           role: m.role === 'coach' ? 'coach' : 'athlete',
+          text: typeof m.text === 'string' ? m.text : '',
+          at: typeof m.at === 'string' ? m.at : undefined,
+        }))
+        .filter((m) => m.text.length > 0)
+    : [];
+
+  // Same shape, different summary key: longevityConversation lives next
+  // to coachConversation on the same row. Each agent reads its own list
+  // when composing its prompt, and either can see the other's via the
+  // AthleteContext for cross-coach awareness.
+  const rawLongevityConv = summary.longevityConversation;
+  const longevityConversation: LongevityConversationMessageStored[] = Array.isArray(rawLongevityConv)
+    ? (rawLongevityConv as Array<Record<string, unknown>>)
+        .map((m): LongevityConversationMessageStored => ({
+          role: m.role === 'guru' ? 'guru' : 'athlete',
           text: typeof m.text === 'string' ? m.text : '',
           at: typeof m.at === 'string' ? m.at : undefined,
         }))
@@ -273,7 +310,7 @@ async function loadCoachConversation(
         }
       : null;
 
-  return { conversation, followUp };
+  return { conversation, followUp, longevityConversation };
 }
 
 export type LoadAthleteContextOptions = {
@@ -362,6 +399,7 @@ export async function loadAthleteContext(
     longevityContext,
     conversation: conversationState.conversation,
     followUp: conversationState.followUp,
+    longevityConversation: conversationState.longevityConversation,
     trainingSoul,
     longevitySoul,
   };

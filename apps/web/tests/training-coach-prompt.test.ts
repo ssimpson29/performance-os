@@ -69,6 +69,7 @@ function makeContext(overrides: Partial<AthleteContext> = {}): AthleteContext {
     longevityContext: null,
     conversation: [],
     followUp: null,
+    longevityConversation: [],
     trainingSoul: makeSoul('training'),
     longevitySoul: makeSoul('longevity'),
     ...overrides,

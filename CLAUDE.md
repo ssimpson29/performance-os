@@ -172,9 +172,18 @@ The system prompt gives the LLM agency rather than restricting it to "translate 
 **Longevity Guru** (strategic, healthspan-driven):
 1. **Deterministic engine** — `apps/web/lib/longevity/{reference-ranges,trend-detection,prioritization}.ts`
 2. **Athlete-scoped data loader** — `apps/web/app/longevity/longevity-data.ts`
-3. **Interactive guru service** — `apps/web/lib/agents/longevity-guru.ts` + `apps/web/lib/longevity/persistence.ts` (cross-write)
+3. **Two LLM modes:**
+   - **Single-shot evaluation** — `lib/agents/longevity-guru.ts::runLongevityGuru`. Used by `POST /api/longevity/evaluate` + the "Re-evaluate now" button. Reads the panel, writes a fresh narrative + priorities + longevityContext cross-write to `daily_summaries.summary`.
+   - **Conversational chat** — `lib/agents/longevity-chat.ts::runLongevityChat`. Used by `POST /api/longevity/message`. Multi-turn tool-calling agent loop with `LONGEVITY_TOOL_DEFINITIONS` (separate registry from coach-tools): `getRecentBiomarkers`, `getMarkerHistory`, `getLongevitySoul`, `updateLongevitySoul`, `getInjuryHistory`, `runDeterministicPrioritization`. Conversation persists at `daily_summaries.summary.longevityConversation` (last 20 turns).
 
 LLM is optional. Always preserve deterministic fallback for tests, local dev, and provider outages.
+
+### Longevity Guru conversation
+- Persistence shape: `daily_summaries.summary.longevityConversation` — array of `{ role: 'athlete' | 'guru', text, at }`. Mirrors `coachConversation` but with a distinct AI-side role label.
+- Tool registry: `lib/agents/longevity-tools.ts` — separate from coach-tools so each agent has tool descriptions tuned to its audience. `updateLongevitySoul` writes with `updated_by: 'longevity_guru'` (the soul_author enum from migration 010 already supports it).
+- Cross-coach awareness: `AthleteContext.longevityConversation` is loaded alongside `conversation` (the training-coach thread) so either agent can see what the other discussed.
+- The chat path does NOT recompute deterministic priorities every turn (cost + cache invalidation pressure). It calls `runDeterministicPrioritization` only on demand — the LLM triggers it when an athlete asks "what should I prioritize?" otherwise it grounds its reply in the existing `longevityNarrative` + `longevityPriorities` on `daily_summaries.summary`.
+- The single-shot `/api/longevity/evaluate` path is unchanged. Re-evaluation still owns priority-list updates.
 
 ### Image / PDF-based ingestion (vision LLM)
 - `POST /api/imports/biomarker-panel-image` accepts JPG / PNG / WebP /
@@ -769,7 +778,43 @@ Failure is logged and non-fatal — the next sync re-tries.
     invalidation on chat turns.
 - **Plan doc:** `docs/plans/2026-05-23-llm-todays-call.md`.
 
-### 9. Plan docs index (existing)
+### 9. Longevity Guru conversational chat — done (2026-05-23)
+- **Problem.** Longevity Guru was single-shot: athlete uploaded labs,
+  hit "Re-evaluate now," got a narrative + priorities. No follow-ups.
+  Soul Phase 2 was left explicit: refactor to a tool-calling loop +
+  let the guru write to the longevity soul.
+- **Fix shipped:**
+  - `lib/agents/longevity-tools.ts` — separate tool registry:
+    `getRecentBiomarkers`, `getMarkerHistory`, `getLongevitySoul`,
+    `updateLongevitySoul` (writes with `updated_by: 'longevity_guru'`),
+    `getInjuryHistory`, `runDeterministicPrioritization` (wraps the
+    existing engine for on-demand structured priorities).
+  - `lib/agents/longevity-chat.ts` — new `runLongevityChat` agent
+    loop mirroring `runTrainingCoach`. Reuses
+    `buildSystemPrompt(soul)` from `longevity-guru.ts` so persona is
+    consistent across single-shot + chat surfaces. Deterministic
+    fallback when env missing. `persistLongevityChatRun` merges into
+    `daily_summaries.summary.longevityConversation` without
+    clobbering `coachConversation` / `longevityContext` / `todaysCall`.
+  - `AthleteContext.longevityConversation` — new field, loaded in
+    parallel via the existing daily_summaries query (no extra
+    round-trip).
+  - `POST /api/longevity/message` — auth-scoped, rate-limited
+    (10/min), parallel to `/api/coach/message`.
+  - `/longevity` page extended with `<LongevityChat>` client
+    component below the priorities + narrative + watching cards.
+    Optimistic athlete-message append, server returns trimmed
+    conversation as ground truth.
+  - Single-shot `runLongevityGuru` + `/api/longevity/evaluate`
+    unchanged. Both paths share the system prompt builder.
+  - Tests: `tests/longevity-chat.test.ts` (env-missing fallback,
+    conversation trim, empty message handling),
+    `tests/longevity-message-route.test.ts` (401, happy path,
+    context-load failure → 500, persistence failure → 200 with
+    message intact).
+- **Plan doc:** `docs/plans/2026-05-23-longevity-guru-chat.md`.
+
+### 10. Plan docs index (existing)
 - `docs/plans/2026-05-04-training-import-and-adaptive-coach.md`
 - `docs/plans/2026-05-05-iphone-first-app-mvp.md`
 - `docs/plans/2026-05-07-production-deployment-and-ios-backend.md`
@@ -779,6 +824,7 @@ Failure is logged and non-fatal — the next sync re-tries.
 - `docs/plans/2026-05-23-onboarding-and-plan-creation.md`
 - `docs/plans/2026-05-23-account-page-and-souls.md`
 - `docs/plans/2026-05-23-llm-todays-call.md`
+- `docs/plans/2026-05-23-longevity-guru-chat.md`
 - `docs/deploy.md` — in-repo deployment guide (env matrix, Vercel
   recipe, post-deploy steps).
 

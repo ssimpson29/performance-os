@@ -9,6 +9,12 @@ import type { LongevityLever } from '@/lib/longevity/prioritization';
 import { getAuthenticatedUser } from '@/lib/server-auth';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 
+export type LongevityConversationMessageView = {
+  role: 'athlete' | 'guru';
+  text: string;
+  at?: string;
+};
+
 export type LongevityPageState =
   | { kind: 'unauthenticated' }
   | { kind: 'no-data'; userId: string; email?: string | null }
@@ -24,6 +30,13 @@ export type LongevityPageState =
       markerEvaluations: LongevityMarkerEvaluation[];
       longevityContext: LongevityContext | null;
       conflictsWithTraining: Array<{ leverKey: string; description: string }>;
+      /**
+       * Prior conversation between the athlete and the Longevity Guru,
+       * loaded from daily_summaries.summary.longevityConversation.
+       * Trimmed to the last 20 turns by the persister. Empty array when
+       * the athlete hasn't chatted with the guru yet.
+       */
+      longevityConversation: LongevityConversationMessageView[];
     };
 
 type DailySummaryRow = {
@@ -109,5 +122,17 @@ async function loadLongevityPageStateUnsafe(args?: { today?: string }): Promise<
     markerEvaluations: [],
     longevityContext: (blob.longevityContext as LongevityContext | undefined) ?? null,
     conflictsWithTraining: [],
+    longevityConversation: parseLongevityConversation(blob.longevityConversation),
   };
+}
+
+function parseLongevityConversation(raw: unknown): LongevityConversationMessageView[] {
+  if (!Array.isArray(raw)) return [];
+  return (raw as Array<Record<string, unknown>>)
+    .map((m): LongevityConversationMessageView => ({
+      role: m.role === 'guru' ? 'guru' : 'athlete',
+      text: typeof m.text === 'string' ? m.text : '',
+      at: typeof m.at === 'string' ? m.at : undefined,
+    }))
+    .filter((m) => m.text.length > 0);
 }

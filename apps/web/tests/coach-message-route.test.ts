@@ -40,6 +40,7 @@ const SAMPLE_CONTEXT = {
   longevityContext: null,
   conversation: [],
   followUp: null,
+  longevityConversation: [],
   trainingSoul: {
     userId: 'real-athlete',
     kind: 'training',
