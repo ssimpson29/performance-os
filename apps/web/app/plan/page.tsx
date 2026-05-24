@@ -224,7 +224,13 @@ export default async function PlanPage() {
                     <>
                       <span className="text-white">{pos.phaseName}</span>
                       {currentWeekLabel ? <> · {currentWeekLabel}</> : null}
-                      {currentWeek?.keyFocus ? <> · {currentWeek.keyFocus}</> : null}
+                      {/* keyFocus is parser-derived, notes is the workbook 'Notes' column.
+                          Show whichever exists; keyFocus first when both. */}
+                      {currentWeek?.keyFocus
+                        ? <> · {currentWeek.keyFocus}</>
+                        : currentWeek?.notes
+                          ? <> · {currentWeek.notes}</>
+                          : null}
                       {currentWeek?.isDeload ? (
                         <span className="ml-2 rounded-full border border-amber-300/40 px-2 py-0.5 text-xs uppercase tracking-[0.18em] text-amber-300">
                           Deload
@@ -237,6 +243,15 @@ export default async function PlanPage() {
                 </p>
               </div>
 
+              {/*
+                Per-day target lookup from the CURRENT week's PhaseWeekTarget.
+                The workbook's weekly tables (PHASE N: ... Weeks X-Y) carry
+                per-week overrides for Saturday/Sunday/Thursday — these are
+                what change phase-to-phase ("5h steady" Saturday in Phase 2
+                vs. "2.5–3 hrs building toward 4–5 hrs" Saturday in Phase 1).
+                The base weeklyStructure[] is Phase 1's daily template; for
+                everything else (Mon/Tue/Wed/Fri) it stays the prescription.
+              */}
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                 {DAY_ORDER.map((day) => {
                   const base = baseByDay.get(day);
@@ -246,6 +261,15 @@ export default async function PlanPage() {
                   const isPast = DAY_ORDER.indexOf(day) < todayIdx;
                   const isOverridden = adaptation?.action != null && adaptation.action !== 'keep';
 
+                  // Per-week target wins over the Phase 1 base template
+                  // for the three days the workbook explicitly overrides.
+                  // Empty string = column was blank → fall back to base.
+                  const weekDayTarget =
+                    day === 'Saturday' ? currentWeek?.saturdayTarget?.trim() :
+                    day === 'Sunday' ? currentWeek?.sundayTarget?.trim() :
+                    day === 'Thursday' ? currentWeek?.thursdayTarget?.trim() :
+                    null;
+
                   // Today + cached call gets the LLM headline; everything else
                   // shows the plan template (with an override badge if any).
                   const usingCachedCall = isToday && cachedCall != null;
@@ -253,8 +277,8 @@ export default async function PlanPage() {
                     ? cachedCall.headline
                     : (adaptation?.recommendedSessionType ?? base.runSession ?? '—');
                   const bodyDetails = usingCachedCall
-                    ? cachedCall.details?.trim() || base.details
-                    : base.details;
+                    ? cachedCall.details?.trim() || weekDayTarget || base.details
+                    : (weekDayTarget || base.details);
                   const overrideReason = !usingCachedCall && isOverridden ? adaptation?.reason : null;
 
                   const cardClass = isToday
