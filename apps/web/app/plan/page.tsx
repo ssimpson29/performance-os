@@ -2,80 +2,10 @@ import Link from 'next/link';
 
 import { PageHero } from '@/components/layout/page-hero';
 import { Card } from '@/components/ui/card';
-import { getAuthenticatedUser } from '@/lib/server-auth';
-import { createServerSupabaseClient } from '@/lib/supabase-server';
-import { adaptWeeklyStructure } from '@/lib/training-plan/adaptive-coach';
-import type { AdaptiveCoachResult, PhaseBlock, SupportTemplate, WeeklyStructureSession } from '@/lib/training-plan/types';
 
-import { loadAdaptiveCoachContext, loadActiveTrainingPlan } from './coach-data';
+import { loadPlanView } from './plan-data';
 import { buildPlanVsActualPreview, loadPlanVsActualPreview } from './plan-vs-actual-data';
 import { PlanVsActualSection } from './plan-vs-actual-section';
-
-type PlanView =
-  | { kind: 'unauthenticated' }
-  | { kind: 'no-plan' }
-  | {
-      kind: 'ready';
-      planName: string;
-      goal: string | null;
-      raceDate: string | null;
-      planStartDate: string | null;
-      weeklyStructure: WeeklyStructureSession[];
-      phaseBlocks: PhaseBlock[];
-      supportTemplates: SupportTemplate[];
-      adaptive: AdaptiveCoachResult;
-    };
-
-type TrainingPlanRow = {
-  name: string | null;
-  metadata: Record<string, unknown> | null;
-};
-
-async function loadPlanView(): Promise<PlanView> {
-  try {
-    return await loadPlanViewUnsafe();
-  } catch (err) {
-    console.error('loadPlanView failed:', err instanceof Error ? err.message : err);
-    return { kind: 'unauthenticated' };
-  }
-}
-
-async function loadPlanViewUnsafe(): Promise<PlanView> {
-  const user = await getAuthenticatedUser();
-  if (!user) return { kind: 'unauthenticated' };
-
-  const supabase = createServerSupabaseClient();
-  const plan = await loadActiveTrainingPlan(supabase, user.id);
-  if (!plan) return { kind: 'no-plan' };
-
-  // Pull plan name + supportTemplates directly (the data loader doesn't carry them).
-  const { data: rows } = await supabase
-    .from('training_plans')
-    .select('name, metadata')
-    .eq('id', plan.planId)
-    .limit(1);
-  const planRow = ((rows as TrainingPlanRow[] | null) ?? [])[0];
-  const supportTemplates =
-    (planRow?.metadata?.supportTemplates as SupportTemplate[] | undefined) ?? [];
-  const planName = planRow?.name ?? 'Imported plan';
-
-  // Run the race-aware engine against today's athlete state.
-  const today = new Date().toISOString().slice(0, 10);
-  const coachInput = await loadAdaptiveCoachContext(supabase, user.id, { today });
-  const adaptive = adaptWeeklyStructure(coachInput);
-
-  return {
-    kind: 'ready',
-    planName,
-    goal: plan.goal,
-    raceDate: plan.raceDate,
-    planStartDate: plan.planStartDate,
-    weeklyStructure: plan.weeklyStructure,
-    phaseBlocks: plan.phaseBlocks,
-    supportTemplates,
-    adaptive,
-  };
-}
 
 export default async function PlanPage() {
   const view = await loadPlanView();
@@ -280,6 +210,13 @@ export default async function PlanPage() {
 
             if (rows.length === 0) return null;
 
+            // Cached LLM-composed Today's Call (if /coach has been loaded
+            // today). When present, today's row renders this composition
+            // instead of the plan template — same source of truth as the
+            // /coach surface, no more drift. Tomorrow → end-of-week still
+            // render from the plan template (Today's Call is today-only).
+            const cachedCall = view.todaysCall;
+
             return (
               <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-5">
                 <p className="text-xs uppercase tracking-[0.18em] text-brand2">
@@ -287,6 +224,38 @@ export default async function PlanPage() {
                 </p>
                 <ul className="mt-2 space-y-2 text-sm text-muted">
                   {rows.map((row) => {
+                    // Today + cached call → mirror /coach's composition so
+                    // the two surfaces never disagree. Other days render
+                    // the plan template + any engine override.
+                    if (row.isToday && cachedCall) {
+                      return (
+                        <li
+                          key={row.day}
+                          className="rounded-lg bg-brand2/10 px-2 py-1"
+                        >
+                          <span className="font-semibold text-brand2">
+                            {row.day} (today):
+                          </span>{' '}
+                          <span className="text-white">{cachedCall.headline}</span>
+                          {cachedCall.details?.trim() ? (
+                            <>
+                              {' '}
+                              <span className="text-xs text-muted">
+                                {cachedCall.details}
+                              </span>
+                            </>
+                          ) : null}
+                          {' '}
+                          <Link
+                            href="/coach"
+                            className="text-xs uppercase tracking-[0.18em] text-brand2/80 hover:text-brand2"
+                          >
+                            see full call →
+                          </Link>
+                        </li>
+                      );
+                    }
+
                     // Choose the headline session: adaptation wins when it
                     // changes things; otherwise show the base session.
                     const headlineSession =
@@ -338,6 +307,19 @@ export default async function PlanPage() {
                     );
                   })}
                 </ul>
+                {!cachedCall ? (
+                  <p className="mt-3 text-xs text-muted">
+                    Today&apos;s row is the plan template.{' '}
+                    <Link
+                      href="/coach"
+                      className="uppercase tracking-[0.18em] text-brand2/80 hover:text-brand2"
+                    >
+                      Visit Coach →
+                    </Link>{' '}
+                    to compose a live call against your current phase and
+                    recovery.
+                  </p>
+                ) : null}
               </div>
             );
           })() : null}
