@@ -155,176 +155,178 @@ export default async function PlanPage() {
               </p>
             </div>
           </div>
-          {view.weeklyStructure.length ? (() => {
-            // Source of truth: the imported plan's weeklyStructure (always 7
-            // days). The adaptive engine only emits a recommendation when it
-            // wants to override the base — so we layer adaptations on top of
-            // the base plan rather than rendering only the overrides. That
-            // way today and tomorrow always render, even when the engine has
-            // nothing to change.
-            //
-            // Week starts Monday (ultra training convention — long run on
-            // the weekend ends the week). From any day, show that day
-            // through Sunday. Today gets highlighted in brand2.
-            const DAY_ORDER = [
-              'Monday',
-              'Tuesday',
-              'Wednesday',
-              'Thursday',
-              'Friday',
-              'Saturday',
-              'Sunday',
-            ];
-            // getUTCDay returns 0=Sun, 1=Mon, ..., 6=Sat. Convert to
-            // Monday-first: 0=Mon, ..., 6=Sun.
-            const utcDay = new Date().getUTCDay();
-            const todayIdx = utcDay === 0 ? 6 : utcDay - 1;
-            const todayDayName = DAY_ORDER[todayIdx];
-            // Today through end-of-week (Sunday). If today is Sunday, just
-            // Sunday. If today is Monday, all 7 days.
-            const upcomingDays = DAY_ORDER.slice(todayIdx);
-
-            const adaptationByDay = new Map(
-              view.adaptive.recommendations.map((rec) => [rec.day, rec]),
-            );
-            const baseByDay = new Map(
-              view.weeklyStructure.map((session) => [session.day, session]),
-            );
-
-            const rows = upcomingDays
-              .map((day) => {
-                const base = baseByDay.get(day);
-                const adaptation = adaptationByDay.get(day);
-                if (!base && !adaptation) return null;
-                return {
-                  day,
-                  isToday: day === todayDayName,
-                  baseSession: base?.runSession ?? null,
-                  baseDetails: base?.details ?? null,
-                  recommendedSession: adaptation?.recommendedSessionType ?? null,
-                  action: adaptation?.action ?? null,
-                  reason: adaptation?.reason ?? null,
-                };
-              })
-              .filter((r): r is NonNullable<typeof r> => r !== null);
-
-            if (rows.length === 0) return null;
-
-            // Cached LLM-composed Today's Call (if /coach has been loaded
-            // today). When present, today's row renders this composition
-            // instead of the plan template — same source of truth as the
-            // /coach surface, no more drift. Tomorrow → end-of-week still
-            // render from the plan template (Today's Call is today-only).
-            const cachedCall = view.todaysCall;
-
-            return (
-              <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-5">
-                <p className="text-xs uppercase tracking-[0.18em] text-brand2">
-                  This week — today + remaining days
-                </p>
-                <ul className="mt-2 space-y-2 text-sm text-muted">
-                  {rows.map((row) => {
-                    // Today + cached call → mirror /coach's composition so
-                    // the two surfaces never disagree. Other days render
-                    // the plan template + any engine override.
-                    if (row.isToday && cachedCall) {
-                      return (
-                        <li
-                          key={row.day}
-                          className="rounded-lg bg-brand2/10 px-2 py-1"
-                        >
-                          <span className="font-semibold text-brand2">
-                            {row.day} (today):
-                          </span>{' '}
-                          <span className="text-white">{cachedCall.headline}</span>
-                          {cachedCall.details?.trim() ? (
-                            <>
-                              {' '}
-                              <span className="text-xs text-muted">
-                                {cachedCall.details}
-                              </span>
-                            </>
-                          ) : null}
-                          {' '}
-                          <Link
-                            href="/coach"
-                            className="text-xs uppercase tracking-[0.18em] text-brand2/80 hover:text-brand2"
-                          >
-                            see full call →
-                          </Link>
-                        </li>
-                      );
-                    }
-
-                    // Choose the headline session: adaptation wins when it
-                    // changes things; otherwise show the base session.
-                    const headlineSession =
-                      row.recommendedSession ?? row.baseSession ?? '—';
-                    const isOverridden =
-                      row.action != null && row.action !== 'keep';
-                    return (
-                      <li
-                        key={row.day}
-                        className={
-                          row.isToday ? 'rounded-lg bg-brand2/10 px-2 py-1' : ''
-                        }
-                      >
-                        <span
-                          className={
-                            row.isToday
-                              ? 'font-semibold text-brand2'
-                              : 'text-white'
-                          }
-                        >
-                          {row.day}
-                          {row.isToday ? ' (today)' : ''}:
-                        </span>{' '}
-                        {headlineSession}
-                        {isOverridden && row.action ? (
-                          <>
-                            {' — '}
-                            <span className="text-xs uppercase tracking-[0.18em] text-amber-300">
-                              {row.action}
-                            </span>
-                          </>
-                        ) : null}
-                        {row.reason ? (
-                          <>
-                            {' '}
-                            <span className="text-xs text-muted">
-                              {row.reason}
-                            </span>
-                          </>
-                        ) : row.baseDetails ? (
-                          <>
-                            {' '}
-                            <span className="text-xs text-muted">
-                              {row.baseDetails}
-                            </span>
-                          </>
-                        ) : null}
-                      </li>
-                    );
-                  })}
-                </ul>
-                {!cachedCall ? (
-                  <p className="mt-3 text-xs text-muted">
-                    Today&apos;s row is the plan template.{' '}
-                    <Link
-                      href="/coach"
-                      className="uppercase tracking-[0.18em] text-brand2/80 hover:text-brand2"
-                    >
-                      Visit Coach →
-                    </Link>{' '}
-                    to compose a live call against your current phase and
-                    recovery.
-                  </p>
-                ) : null}
-              </div>
-            );
-          })() : null}
         </Card>
       </section>
+
+      {view.weeklyStructure.length ? (() => {
+        // "This week" — phase-aware 7-card grid showing the current week's
+        // sessions day-by-day. Replaces the old compact-list "today + remaining
+        // days" block AND the static "Weekly structure (base template)"
+        // section below it (both deleted) with one unified view: the plan
+        // template + adaptive overrides + cached LLM Today's Call for today.
+        // Past days fade so the eye lands on today and what's ahead.
+        const DAY_ORDER = [
+          'Monday',
+          'Tuesday',
+          'Wednesday',
+          'Thursday',
+          'Friday',
+          'Saturday',
+          'Sunday',
+        ];
+        // getUTCDay returns 0=Sun, 1=Mon, ..., 6=Sat. Convert to Monday-first.
+        const utcDay = new Date().getUTCDay();
+        const todayIdx = utcDay === 0 ? 6 : utcDay - 1;
+        const todayDayName = DAY_ORDER[todayIdx];
+
+        const adaptationByDay = new Map(
+          view.adaptive.recommendations.map((rec) => [rec.day, rec]),
+        );
+        const baseByDay = new Map(
+          view.weeklyStructure.map((session) => [session.day, session]),
+        );
+
+        // Cached LLM-composed Today's Call (if /coach has been loaded today).
+        // Renders on today's card; tomorrow → Sunday stay on the plan template.
+        const cachedCall = view.todaysCall;
+
+        // Current phase + week context for the section header. Pulled from
+        // phaseBlocks[currentPhase].weeks[currentWeekIndex] so the user
+        // sees the prescribed targets they're training against this week.
+        const pos = view.adaptive.phasePosition;
+        const currentWeek =
+          pos && pos.phaseIndex >= 0
+            ? view.phaseBlocks[pos.phaseIndex]?.weeks[pos.weekIndexInPhase] ?? null
+            : null;
+        const totalPlanWeeks = view.phaseBlocks.reduce((n, b) => n + b.weeks.length, 0);
+        const currentWeekLabel =
+          pos && pos.phaseIndex >= 0
+            ? `Week ${pos.totalWeekIndex + 1} of ${totalPlanWeeks}`
+            : null;
+
+        return (
+          <section className="shell pb-8">
+            <Card className="space-y-5">
+              <div>
+                <p className="eyebrow">This week</p>
+                <h2 className="mt-2 text-xl font-semibold text-white">
+                  {currentWeek ? (
+                    <>
+                      {currentWeek.mileageTarget} miles · {currentWeek.vertTarget} vert
+                      {currentWeek.fuelTarget ? <> · fuel {currentWeek.fuelTarget}</> : null}
+                    </>
+                  ) : (
+                    <>7 days of base sessions</>
+                  )}
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-muted">
+                  {pos?.phaseName ? (
+                    <>
+                      <span className="text-white">{pos.phaseName}</span>
+                      {currentWeekLabel ? <> · {currentWeekLabel}</> : null}
+                      {currentWeek?.keyFocus ? <> · {currentWeek.keyFocus}</> : null}
+                      {currentWeek?.isDeload ? (
+                        <span className="ml-2 rounded-full border border-amber-300/40 px-2 py-0.5 text-xs uppercase tracking-[0.18em] text-amber-300">
+                          Deload
+                        </span>
+                      ) : null}
+                    </>
+                  ) : (
+                    <>Today&apos;s session is highlighted; adapted overrides are marked.</>
+                  )}
+                </p>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {DAY_ORDER.map((day) => {
+                  const base = baseByDay.get(day);
+                  if (!base) return null;
+                  const adaptation = adaptationByDay.get(day);
+                  const isToday = day === todayDayName;
+                  const isPast = DAY_ORDER.indexOf(day) < todayIdx;
+                  const isOverridden = adaptation?.action != null && adaptation.action !== 'keep';
+
+                  // Today + cached call gets the LLM headline; everything else
+                  // shows the plan template (with an override badge if any).
+                  const usingCachedCall = isToday && cachedCall != null;
+                  const headline = usingCachedCall
+                    ? cachedCall.headline
+                    : (adaptation?.recommendedSessionType ?? base.runSession ?? '—');
+                  const bodyDetails = usingCachedCall
+                    ? cachedCall.details?.trim() || base.details
+                    : base.details;
+                  const overrideReason = !usingCachedCall && isOverridden ? adaptation?.reason : null;
+
+                  const cardClass = isToday
+                    ? 'space-y-3 border-brand2/60 bg-brand2/[0.06]'
+                    : isPast
+                      ? 'space-y-3 opacity-60'
+                      : 'space-y-3';
+
+                  return (
+                    <Card key={day} className={cardClass}>
+                      <div>
+                        <div className="flex items-center justify-between gap-2">
+                          <p className={isToday ? 'text-sm font-semibold text-brand2' : 'text-sm text-brand2'}>
+                            {day}
+                            {isToday ? ' · today' : ''}
+                          </p>
+                          {isOverridden && adaptation?.action ? (
+                            <span className="rounded-full border border-amber-300/40 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-amber-300">
+                              {adaptation.action.replace(/-/g, ' ')}
+                            </span>
+                          ) : null}
+                        </div>
+                        <h3 className="mt-2 text-lg font-semibold text-white">{headline}</h3>
+                      </div>
+
+                      {bodyDetails ? (
+                        <p className="text-sm leading-6 text-muted">{bodyDetails}</p>
+                      ) : null}
+
+                      {overrideReason ? (
+                        <p className="rounded-2xl border border-amber-300/20 bg-amber-300/[0.04] p-3 text-xs leading-6 text-amber-200/90">
+                          {overrideReason}
+                        </p>
+                      ) : null}
+
+                      {base.strengthMobility && base.strengthMobility.trim().toLowerCase() !== 'none' ? (
+                        <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-3 text-sm text-muted">
+                          <p className="text-xs uppercase tracking-[0.18em] text-brand2/80">Support work</p>
+                          <p className="mt-1 text-white">{base.strengthMobility}</p>
+                          {base.exactWork && base.exactWork.trim().toLowerCase() !== 'none' ? (
+                            <p className="mt-1 text-xs text-muted">{base.exactWork}</p>
+                          ) : null}
+                        </div>
+                      ) : null}
+
+                      {usingCachedCall ? (
+                        <Link
+                          href="/coach"
+                          className="inline-block text-xs uppercase tracking-[0.18em] text-brand2/80 hover:text-brand2"
+                        >
+                          See full call →
+                        </Link>
+                      ) : isToday && !cachedCall ? (
+                        <p className="text-xs text-muted">
+                          Template shown.{' '}
+                          <Link
+                            href="/coach"
+                            className="uppercase tracking-[0.18em] text-brand2/80 hover:text-brand2"
+                          >
+                            Visit Coach →
+                          </Link>{' '}
+                          to compose a live call.
+                        </p>
+                      ) : null}
+                    </Card>
+                  );
+                })}
+              </div>
+            </Card>
+          </section>
+        );
+      })() : null}
 
       <section className="shell pb-8">
         <Card className="space-y-4">
@@ -433,34 +435,6 @@ export default async function PlanPage() {
             })}
           </div>
         </Card>
-      </section>
-
-      <section className="shell grid gap-6 pb-8 lg:grid-cols-3">
-        <Card className="space-y-4 lg:col-span-3">
-          <div>
-            <p className="eyebrow">Weekly structure (base template)</p>
-            <h2 className="mt-2 text-xl font-semibold text-white">7 days, base sessions</h2>
-            <p className="mt-2 text-sm text-muted">
-              The athlete-facing weekly template the plan adapts from. The race-aware engine adjusts specific days (intensity, downgrades) based on recent recovery / weekend load.
-            </p>
-          </div>
-        </Card>
-
-        {view.weeklyStructure.map((session) => (
-          <Card key={session.day} className="space-y-4">
-            <div>
-              <p className="text-sm text-brand2">{session.day}</p>
-              <h2 className="mt-2 text-xl font-semibold text-white">{session.runSession}</h2>
-            </div>
-            <p className="text-sm leading-6 text-muted">{session.details}</p>
-            {session.strengthMobility ? (
-              <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-4 text-sm text-muted">
-                <p className="font-medium text-white">Support work</p>
-                <p className="mt-2">{session.strengthMobility}</p>
-              </div>
-            ) : null}
-          </Card>
-        ))}
       </section>
 
       <PlanVsActualSection preview={effectivePlanVsActual} />
