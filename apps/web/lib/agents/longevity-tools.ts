@@ -336,12 +336,80 @@ const handleRunDeterministicPrioritization: LongevityToolHandler = async (_args,
 };
 
 // ---------------------------------------------------------------------------
+// Tool: getRecentWorkouts
+//
+// The longevity guru shares the training coach's loaded AthleteContext, so
+// recent training is already in hand — it just needs a tool to read it. Tuned
+// for the guru's job: ground nutrition / fueling / hydration / recovery advice
+// in real energy expenditure and load, not generic guidance.
+// ---------------------------------------------------------------------------
+
+const getRecentWorkoutsDefinition: LongevityToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'getRecentWorkouts',
+    description:
+      "Get the athlete's recent training (last 14 days by default) plus an aggregate training-load summary. USE THIS to ground nutrition, fueling, hydration, and recovery advice in actual energy expenditure and load — e.g. carbohydrate needs around long/hard sessions, protein for recovery, fueling across back-to-back days, electrolytes for high-sweat or high-vert efforts. Each session carries date, type, duration, distance, elevation gain, avg/max HR, perceived exertion, Strava suffer score, energy (kcal), and derived intensity/load scores. The `summary` aggregates totals (sessions, duration, distance, vert, kcal, load), hard-session count, longest session, and days trained — the fastest read on weekly load. Null fields mean the source didn't record that metric; don't infer a value.",
+    parameters: {
+      type: 'object',
+      properties: {
+        days: { type: 'number', description: 'Days back from today to include. Default 14.' },
+      },
+    },
+  },
+};
+
+const handleGetRecentWorkouts: LongevityToolHandler = async (args, { ctx }) => {
+  const a = (args as { days?: number } | null) ?? {};
+  const days = typeof a.days === 'number' ? a.days : 14;
+  const workouts = ctx.recentWorkouts;
+
+  const sum = (fn: (w: (typeof workouts)[number]) => number | null | undefined) =>
+    workouts.reduce((acc, w) => acc + (fn(w) ?? 0), 0);
+  const totalEnergyKcal = Math.round(sum((w) => w.energyKcal));
+
+  return JSON.stringify({
+    today: ctx.today,
+    lookbackDays: days,
+    count: workouts.length,
+    summary: {
+      totalSessions: workouts.length,
+      totalDurationMinutes: Math.round(sum((w) => w.durationMinutes)),
+      totalDistanceMeters: Math.round(sum((w) => w.distanceMeters)),
+      totalElevationGainM: Math.round(sum((w) => w.elevationGainM)),
+      totalEnergyKcal: totalEnergyKcal || null,
+      totalLoadScore: Math.round(sum((w) => w.loadScore)),
+      hardSessions: workouts.filter((w) => (w.intensityScore ?? 0) >= 7 || (w.perceivedExertion ?? 0) >= 7).length,
+      longestSessionMinutes: workouts.reduce((m, w) => Math.max(m, w.durationMinutes ?? 0), 0),
+      daysTrained: new Set(workouts.map((w) => w.localDate ?? w.day)).size,
+    },
+    workouts: workouts.map((w) => ({
+      localDate: w.localDate,
+      day: w.day,
+      sessionType: w.sessionType,
+      source: w.source,
+      durationMinutes: w.durationMinutes,
+      distanceMeters: w.distanceMeters ?? null,
+      elevationGainM: w.elevationGainM ?? null,
+      avgHeartRate: w.avgHeartRate ?? null,
+      maxHeartRate: w.maxHeartRate ?? null,
+      perceivedExertion: w.perceivedExertion ?? null,
+      sufferScore: w.sufferScore ?? null,
+      energyKcal: w.energyKcal ?? null,
+      intensityScore: w.intensityScore,
+      loadScore: w.loadScore,
+    })),
+  });
+};
+
+// ---------------------------------------------------------------------------
 // Registry + dispatcher
 // ---------------------------------------------------------------------------
 
 export const LONGEVITY_TOOL_DEFINITIONS: LongevityToolDefinition[] = [
   getRecentBiomarkersDefinition,
   getMarkerHistoryDefinition,
+  getRecentWorkoutsDefinition,
   getLongevitySoulDefinition,
   updateLongevitySoulDefinition,
   getInjuryHistoryDefinition,
@@ -351,6 +419,7 @@ export const LONGEVITY_TOOL_DEFINITIONS: LongevityToolDefinition[] = [
 const HANDLERS: Record<string, LongevityToolHandler> = {
   getRecentBiomarkers: handleGetRecentBiomarkers,
   getMarkerHistory: handleGetMarkerHistory,
+  getRecentWorkouts: handleGetRecentWorkouts,
   getLongevitySoul: handleGetLongevitySoul,
   updateLongevitySoul: handleUpdateLongevitySoul,
   getInjuryHistory: handleGetInjuryHistory,
