@@ -14,6 +14,7 @@ import {
   type ProposeRacePlanInput,
   type ProposeRacePlanResult,
 } from './plan-generator';
+import { clearPlanProposal, loadPlanProposal, savePlanProposal } from './plan-proposal-store';
 
 /**
  * Tool registry for the Training Coach LLM agent.
@@ -50,10 +51,15 @@ export type ToolHandlerContext = {
   ctx: AthleteContext;
   supabase: SupabaseClient;
   /**
-   * In-memory store for proposed plans across tool invocations. The agent
-   * calls proposeRacePlan, the result is stashed here, then a later
-   * commitTrainingPlan call can persist it by id. Avoids round-tripping a
-   * large JSON blob through the LLM.
+   * In-memory fast path for proposed plans WITHIN a single agent run: the
+   * agent calls proposeRacePlan, the result is stashed here, and a same-run
+   * commitTrainingPlan reads it back by id without a DB round-trip.
+   *
+   * Cross-request durability (the common case — approval lands in the next
+   * chat message, a fresh request with an empty map) is handled separately by
+   * plan-proposal-store.ts, which persists the draft on
+   * daily_summaries.summary.planProposal. commitTrainingPlan falls back to
+   * that store on an in-memory miss.
    */
   proposalStore: Map<string, ProposeRacePlanResult>;
 };
@@ -471,7 +477,7 @@ const proposeRacePlanDefinition: ToolDefinition = {
   },
 };
 
-const handleProposeRacePlan: ToolHandler = async (args, { proposalStore }) => {
+const handleProposeRacePlan: ToolHandler = async (args, { ctx, supabase, proposalStore }) => {
   const input = args as ProposeRacePlanInput;
   if (!input || !input.raceName || !input.raceDate) {
     return JSON.stringify({ error: 'proposeRacePlan requires raceName and raceDate.' });
@@ -479,6 +485,9 @@ const handleProposeRacePlan: ToolHandler = async (args, { proposalStore }) => {
   const proposal = proposeRacePlan(input);
   const proposalId = `proposal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   proposalStore.set(proposalId, proposal);
+  // Durable copy so the athlete's approval — which arrives in the next request
+  // with a fresh in-memory store — can still find and commit this draft.
+  await savePlanProposal(supabase, { userId: ctx.userId, today: ctx.today, proposalId, proposal });
   return JSON.stringify({
     proposalId,
     summary: proposal.summary,
@@ -498,7 +507,7 @@ const commitTrainingPlanDefinition: ToolDefinition = {
   function: {
     name: 'commitTrainingPlan',
     description:
-      "Persist a previously-proposed plan to the athlete's account. ONLY call this after the athlete has explicitly approved the proposal (e.g. they said 'yes', 'commit it', 'go ahead'). Use the proposalId returned by proposeRacePlan. Once committed, the plan becomes the athlete's active plan and feeds the daily adaptive engine.",
+      "Persist a previously-proposed plan to the athlete's account. ONLY call this after the athlete has explicitly approved the proposal (e.g. they said 'yes', 'commit it', 'go ahead'). Pass the proposalId from proposeRacePlan — it works even when the proposal came from an EARLIER message (the draft is stored server-side), so do NOT re-run proposeRacePlan just to get a fresh id when the athlete is approving the plan you already showed them. Once committed, the plan becomes the athlete's active plan and feeds the daily adaptive engine.",
     parameters: {
       type: 'object',
       properties: {
@@ -518,18 +527,38 @@ const handleCommitTrainingPlan: ToolHandler = async (args, { ctx, supabase, prop
   if (!a?.proposalId) {
     return JSON.stringify({ error: 'commitTrainingPlan requires a proposalId.' });
   }
-  const proposal = proposalStore.get(a.proposalId);
+
+  // 1. Same-run fast path (propose + commit in one agent loop).
+  let proposal = proposalStore.get(a.proposalId);
+  let storedDay: string | undefined;
+
+  // 2. Cross-request durable fallback (the usual case: approval is a new
+  //    request, so the in-memory map is empty). There is at most one active
+  //    proposal per athlete, and it's always the most-recently-presented
+  //    draft, so committing the stored proposal is the athlete's intent even
+  //    if the LLM echoes a slightly stale proposalId.
+  if (!proposal) {
+    const stored = await loadPlanProposal(supabase, { userId: ctx.userId });
+    if (stored) {
+      proposal = stored.proposal;
+      storedDay = stored.day;
+    }
+  }
+
   if (!proposal) {
     return JSON.stringify({
       error: `No proposal found with id ${a.proposalId}. Call proposeRacePlan again to regenerate.`,
     });
   }
+
   try {
     const persisted = await commitProposedPlan(supabase, {
       userId: ctx.userId,
       proposal,
       planStartDate: a.planStartDate ?? ctx.today,
     });
+    // Consume the draft so a repeated "commit it" can't create a duplicate plan.
+    await clearPlanProposal(supabase, { userId: ctx.userId, day: storedDay });
     return JSON.stringify({
       ok: true,
       planId: persisted.planId,

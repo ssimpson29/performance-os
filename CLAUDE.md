@@ -177,6 +177,8 @@ npm run test --workspace @performance-os/web   # vitest run
 
 The system prompt gives the LLM agency rather than restricting it to "translate engine output." The deterministic engine is one input among many. Conversational plan creation works end-to-end: athlete mentions a race → agent calls `proposeRacePlan` → presents summary → athlete approves → agent calls `commitTrainingPlan` → plan lands in `training_plans` + `planned_sessions` via the same persistence path as workbook imports.
 
+**Proposal durability (don't regress).** The athlete's approval almost always arrives in the *next* chat message — a new `/api/coach/message` request. The in-memory `proposalStore` (a `Map` created fresh per run in `training-coach.ts`) is only a same-run fast path; it does NOT survive across requests. Durability comes from `apps/web/lib/agents/plan-proposal-store.ts`, which persists the draft on `daily_summaries.summary.planProposal` (one active proposal per athlete, merge-preserving like `todays-call-cache.ts`). `proposeRacePlan` writes it; `commitTrainingPlan` reads the in-memory map first, then falls back to the durable store on a miss, commits, and clears it. This is why a `commitTrainingPlan` carrying a proposalId from an earlier turn still works — do not "fix" the commit handler to require a same-run proposalId.
+
 **OpenAI LLM parameters.** All three agent call sites (training-coach, longevity-guru, biomarker image-extraction) use `temperature: 1` and `max_completion_tokens: 2000`. Reasoning-class models (o1, o3, gpt-5, gpt-5.5) reject `max_tokens` (must be `max_completion_tokens`) and reject temperatures other than 1. The values also work for legacy gpt-4o-class models.
 
 **Longevity Guru** (strategic, healthspan-driven):
