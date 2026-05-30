@@ -1,11 +1,20 @@
 // Apply pending Supabase migrations (007, 009, 010) via direct postgres.
-// Requires SUPABASE_DB_URL on the command line or in .env.local — the
-// postgres pooler connection string from Supabase Dashboard ->
-// Project Settings -> Database -> Connection string -> "Session" mode.
-// Looks like: postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
 //
-// Idempotent: each migration uses "if not exists" / "add value if not exists",
-// so re-running is safe.
+// Needs a real postgres POOLER CONNECTION STRING in DATABASE_URL (or the
+// SUPABASE_DB_URL alias), or PGHOST/PGPASSWORD. Get the string from Supabase
+// Dashboard -> Project Settings -> Database -> Connection string -> "Session"
+// mode. Shape:
+//   postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
+//
+// NOTE: the DATABASE_URL currently in .env.local is the REST URL
+// (https://<ref>.supabase.co/rest/v1/), which is NOT a postgres connection
+// string — this script rejects it with a clear message. supabase-js (the app)
+// uses REST and is unaffected; only this direct-pg path needs the pg string.
+//
+// As of 2026-05-30 these three migrations are already applied to the live
+// project (rwdzoorymkkjnxhexwkz) via the dashboard SQL editor. This script is
+// kept for future migrations / fresh environments. Idempotent: each migration
+// uses "if not exists" / "add value if not exists", so re-running is safe.
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -22,6 +31,26 @@ for (const line of readFileSync(envPath, 'utf8').split('\n')) {
 const migrationsDir = resolve(__dirname, '..', '..', '..', 'supabase', 'migrations');
 const files = ['007_strava_integration.sql', '009_onboarding_profile.sql', '010_athlete_souls.sql'];
 
+// Prefer the documented DATABASE_URL; SUPABASE_DB_URL is a back-compat alias.
+const connectionString = process.env.DATABASE_URL ?? process.env.SUPABASE_DB_URL;
+
+if (!process.env.PGHOST && !connectionString) {
+  console.error('Missing connection config: set DATABASE_URL (postgres pooler string) or PGHOST/PGPASSWORD.');
+  process.exit(1);
+}
+
+// Guard against the common mix-up of pasting the Supabase REST URL into
+// DATABASE_URL. That endpoint is for supabase-js, not for direct postgres.
+if (!process.env.PGHOST && !/^postgres(ql)?:\/\//.test(connectionString)) {
+  console.error(
+    `DATABASE_URL is not a postgres connection string (got: ${connectionString.slice(0, 40)}...).\n` +
+      'It must start with postgresql:// — use the Session-mode pooler string from\n' +
+      'Supabase Dashboard -> Project Settings -> Database -> Connection string.\n' +
+      'The REST URL (https://<ref>.supabase.co/rest/v1/) does NOT work here.',
+  );
+  process.exit(1);
+}
+
 const clientConfig = process.env.PGHOST
   ? {
       host: process.env.PGHOST,
@@ -31,12 +60,7 @@ const clientConfig = process.env.PGHOST
       database: process.env.PGDATABASE ?? 'postgres',
       ssl: { rejectUnauthorized: false },
     }
-  : { connectionString: process.env.SUPABASE_DB_URL, ssl: { rejectUnauthorized: false } };
-
-if (!clientConfig.host && !clientConfig.connectionString) {
-  console.error('Missing PGHOST/PGPASSWORD or SUPABASE_DB_URL.');
-  process.exit(1);
-}
+  : { connectionString, ssl: { rejectUnauthorized: false } };
 
 const client = new pg.Client(clientConfig);
 await client.connect();
