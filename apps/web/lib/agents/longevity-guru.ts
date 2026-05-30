@@ -16,6 +16,10 @@ import {
   type MarkerSample,
   type DetectMarkerTrendResult,
 } from '@/lib/longevity/trend-detection';
+import {
+  formatTrainingLoadSummary,
+  type TrainingLoadSummary,
+} from '@/lib/training-plan/training-load-summary';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -45,6 +49,13 @@ export type RunLongevityGuruInput = {
   sex?: 'male' | 'female';
   markers: LongevityMarkerInput[];
   trainingLoadOverreach?: TrainingLoadOverreachInput;
+  /**
+   * Aggregate recent training load. The single-shot path has no tool loop, so
+   * the route summarizes the athlete's recent workouts and passes the result
+   * inline — letting the guru ground nutrition / fueling / recovery framing in
+   * real energy expenditure. Optional: absent when no workouts are loaded.
+   */
+  recentTrainingLoad?: { summary: TrainingLoadSummary; lookbackDays: number };
   /** Optional free-text question from the athlete. */
   athleteQuestion?: string;
   /** Optional health/family history one-liners surfaced to the LLM. */
@@ -254,6 +265,8 @@ You receive the deterministic prioritization engine's output as ground truth. Do
 
 Be evidence-informed but humble: you are not a clinician. Recommend lab interpretation with a physician for clinically out-of-range values. Surface "in range but not optimal" as a real lever — that's where most of the longevity work lives.
 
+When a recent training-load line is provided, ground any nutrition, fueling, hydration, or recovery guidance in it — tie carbohydrate, protein, and electrolyte framing to the athlete's actual volume, energy expenditure, and hard-session count rather than giving generic advice.
+
 When the Longevity signal conflicts with the Training Coach (you want recovery; training wants intensity), surface the conflict honestly. The conflict resolution rule is sustained-signal-wins-for-longevity, acute-need-wins-for-training; never silently override.
 
 Keep responses under 180 words. Plain language. No emojis. No exclamation points unless the athlete uses them first.${soulBlock}`;
@@ -266,6 +279,11 @@ function buildUserPrompt(input: RunLongevityGuruInput, output: Omit<LongevityGur
   if (input.sex) lines.push(`Sex: ${input.sex}`);
   if (input.healthHistory && input.healthHistory.length) {
     lines.push(`Health history: ${input.healthHistory.join('; ')}`);
+  }
+  if (input.recentTrainingLoad) {
+    lines.push(
+      formatTrainingLoadSummary(input.recentTrainingLoad.summary, input.recentTrainingLoad.lookbackDays),
+    );
   }
   lines.push('');
 

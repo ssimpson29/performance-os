@@ -1,11 +1,15 @@
 import { NextResponse } from 'next/server';
 
 import { runLongevityGuru, type LongevityMarkerInput } from '@/lib/agents/longevity-guru';
+import { loadCompletedWorkouts } from '@/app/plan/coach-data';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { persistLongevityRun } from '@/lib/longevity/persistence';
 import { loadSoul } from '@/lib/profile/soul-loader';
 import { getAuthenticatedUserId } from '@/lib/server-auth';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
+import { summarizeTrainingLoad, type TrainingLoadSummary } from '@/lib/training-plan/training-load-summary';
+
+const TRAINING_LOAD_LOOKBACK_DAYS = 14;
 
 type BiomarkerResultRow = {
   biomarker_key: string;
@@ -120,11 +124,29 @@ export async function POST(request: Request) {
     console.warn('[longevity/evaluate] failed to load longevity soul:', err);
   }
 
+  // Recent training load so the guru can ground nutrition / fueling / recovery
+  // advice in real expenditure. Best-effort — a workout-load failure must not
+  // block the panel evaluation.
+  let recentTrainingLoad: { summary: TrainingLoadSummary; lookbackDays: number } | undefined;
+  try {
+    const workouts = await loadCompletedWorkouts(supabase, userId, {
+      today,
+      lookbackDays: TRAINING_LOAD_LOOKBACK_DAYS,
+    });
+    recentTrainingLoad = {
+      summary: summarizeTrainingLoad(workouts),
+      lookbackDays: TRAINING_LOAD_LOOKBACK_DAYS,
+    };
+  } catch (err) {
+    console.warn('[longevity/evaluate] failed to load workouts for training-load context:', err);
+  }
+
   const output = await runLongevityGuru({
     today,
     age,
     sex,
     markers,
+    recentTrainingLoad,
     athleteQuestion: body?.athleteQuestion,
     healthHistory: body?.healthHistory,
     longevitySoul,

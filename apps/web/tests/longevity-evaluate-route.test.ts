@@ -4,11 +4,13 @@ const getAuthenticatedUserId = vi.fn();
 const createServerSupabaseClient = vi.fn();
 const runLongevityGuru = vi.fn();
 const persistLongevityRun = vi.fn();
+const loadCompletedWorkouts = vi.fn();
 
 vi.mock('@/lib/server-auth', () => ({ getAuthenticatedUserId }));
 vi.mock('@/lib/supabase-server', () => ({ createServerSupabaseClient }));
 vi.mock('@/lib/agents/longevity-guru', () => ({ runLongevityGuru }));
 vi.mock('@/lib/longevity/persistence', () => ({ persistLongevityRun }));
+vi.mock('@/app/plan/coach-data', () => ({ loadCompletedWorkouts }));
 
 type QueryResult = { data: unknown; error: { message: string } | null };
 
@@ -68,6 +70,7 @@ describe('POST /api/longevity/evaluate', () => {
     );
     runLongevityGuru.mockResolvedValue(SAMPLE_OUTPUT);
     persistLongevityRun.mockResolvedValue({ summaryId: 'sum-1' });
+    loadCompletedWorkouts.mockResolvedValue([]);
   });
 
   it('returns 401 when unauthenticated', async () => {
@@ -109,6 +112,30 @@ describe('POST /api/longevity/evaluate', () => {
     await expect(response.json()).resolves.toMatchObject({ error: expect.stringMatching(/Import a panel first/) });
   });
 
+  it('passes a recent training-load summary to the Guru', async () => {
+    getAuthenticatedUserId.mockResolvedValue('athlete-1');
+    loadCompletedWorkouts.mockResolvedValue([
+      { day: 'Sat', localDate: '2026-05-24', durationMinutes: 180, distanceMeters: 32000, elevationGainM: 1400, energyKcal: 2600, intensityScore: 8, loadScore: 240, sessionType: 'Long Run' },
+    ]);
+    const { POST } = await import('../app/api/longevity/evaluate/route');
+    await POST(makeRequest({}));
+
+    expect(loadCompletedWorkouts).toHaveBeenCalledWith(expect.anything(), 'athlete-1', expect.objectContaining({ lookbackDays: 14 }));
+    const guruArgs = runLongevityGuru.mock.calls[0][0] as { recentTrainingLoad?: { summary: { totalSessions: number }; lookbackDays: number } };
+    expect(guruArgs.recentTrainingLoad?.lookbackDays).toBe(14);
+    expect(guruArgs.recentTrainingLoad?.summary.totalSessions).toBe(1);
+  });
+
+  it('still evaluates when the workout load fails (best-effort)', async () => {
+    getAuthenticatedUserId.mockResolvedValue('athlete-1');
+    loadCompletedWorkouts.mockRejectedValue(new Error('workouts table missing'));
+    const { POST } = await import('../app/api/longevity/evaluate/route');
+    const response = await POST(makeRequest({}));
+    expect(response.status).toBe(200);
+    const guruArgs = runLongevityGuru.mock.calls[0][0] as { recentTrainingLoad?: unknown };
+    expect(guruArgs.recentTrainingLoad).toBeUndefined();
+  });
+
   it('happy path returns the Guru output payload', async () => {
     getAuthenticatedUserId.mockResolvedValue('athlete-1');
     const { POST } = await import('../app/api/longevity/evaluate/route');
@@ -136,6 +163,7 @@ describe('POST /api/longevity/evaluate — rate limit', () => {
     );
     runLongevityGuru.mockResolvedValue(SAMPLE_OUTPUT);
     persistLongevityRun.mockResolvedValue({ summaryId: 'sum-1' });
+    loadCompletedWorkouts.mockResolvedValue([]);
   });
 
   it('returns 429 after 5 calls/min from the same authenticated user', async () => {

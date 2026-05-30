@@ -10,6 +10,7 @@ import {
   evaluateMarker,
   getMarkerSpec,
 } from '@/lib/longevity/reference-ranges';
+import { summarizeTrainingLoad } from '@/lib/training-plan/training-load-summary';
 
 import type { AthleteContext } from './athlete-context';
 
@@ -364,25 +365,11 @@ const handleGetRecentWorkouts: LongevityToolHandler = async (args, { ctx }) => {
   const days = typeof a.days === 'number' ? a.days : 14;
   const workouts = ctx.recentWorkouts;
 
-  const sum = (fn: (w: (typeof workouts)[number]) => number | null | undefined) =>
-    workouts.reduce((acc, w) => acc + (fn(w) ?? 0), 0);
-  const totalEnergyKcal = Math.round(sum((w) => w.energyKcal));
-
   return JSON.stringify({
     today: ctx.today,
     lookbackDays: days,
     count: workouts.length,
-    summary: {
-      totalSessions: workouts.length,
-      totalDurationMinutes: Math.round(sum((w) => w.durationMinutes)),
-      totalDistanceMeters: Math.round(sum((w) => w.distanceMeters)),
-      totalElevationGainM: Math.round(sum((w) => w.elevationGainM)),
-      totalEnergyKcal: totalEnergyKcal || null,
-      totalLoadScore: Math.round(sum((w) => w.loadScore)),
-      hardSessions: workouts.filter((w) => (w.intensityScore ?? 0) >= 7 || (w.perceivedExertion ?? 0) >= 7).length,
-      longestSessionMinutes: workouts.reduce((m, w) => Math.max(m, w.durationMinutes ?? 0), 0),
-      daysTrained: new Set(workouts.map((w) => w.localDate ?? w.day)).size,
-    },
+    summary: summarizeTrainingLoad(workouts),
     workouts: workouts.map((w) => ({
       localDate: w.localDate,
       day: w.day,
