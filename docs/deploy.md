@@ -41,6 +41,7 @@ production-meaning-and-source crib.
 | `APPLE_HEALTH_PUSH_SECRET` | yes (prod) | Generate a fresh random string per env | Used to sign the per-user Apple Health push URL. In local dev `lib/apple-health/automation.ts` falls back to `SUPABASE_SERVICE_ROLE_KEY` when this is unset — that fallback is **intentionally not the production setup**. |
 | `OURA_REDIRECT_URI` | optional | Override only if you need to | The app derives the redirect URI from `NEXT_PUBLIC_APP_URL` when this is unset. |
 | `APPLE_HEALTH_IMPORT_BUCKET` | optional | Supabase storage | Only needed if you stage raw export uploads. |
+| `CRON_SECRET` | yes (prod) | Generate a fresh random string | Guards the Vercel Cron endpoints (`/api/cron/sync-oura`). Vercel auto-sends `Authorization: Bearer ${CRON_SECRET}` on cron runs; the routes fail closed (500) if it's unset, so the **daily Oura sync won't run until this is set**. |
 | `AI_COACH_*` | optional | OpenAI-compatible provider | Deterministic fallback is intentional when unset. |
 | `OPENAI_API_KEY` | optional | Reserved | Future research / insights tooling. |
 
@@ -98,6 +99,26 @@ Because the signature is HMAC of the user ID with
 `APPLE_HEALTH_PUSH_SECRET`, rotating that secret invalidates every existing
 signed URL — plan a rotation by re-pushing fresh URLs to all clients in the
 same change.
+
+### Scheduled jobs (Vercel Cron)
+
+`vercel.json` (repo root) registers a daily cron at `0 11 * * *` hitting
+`/api/cron/sync-oura` — the Oura recovery sync, since Oura has no webhook.
+Vercel picks up the schedule automatically on deploy; no dashboard step is
+needed beyond setting the env var.
+
+1. Set `CRON_SECRET` in the Vercel project (e.g.
+   `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`).
+   Until it's set, the cron route returns 500 and the sync never runs.
+2. Verify under **Vercel → Project → Settings → Cron Jobs** that the job is
+   listed after deploy. You can "Run" it once manually to confirm.
+3. The first run backfills every active Oura integration from its
+   `last_synced_at` to today, so a long-dormant connection catches up in one
+   invocation. Re-check with `node apps/web/scripts/oura-status.mjs`.
+
+> **Plan note:** Vercel Hobby supports daily cron cadence. To sync more
+> frequently (e.g. hourly), the project must be on Pro — bump the `schedule`
+> in `vercel.json` then.
 
 ## Smoke checklist
 

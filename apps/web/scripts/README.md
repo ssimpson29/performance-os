@@ -19,5 +19,6 @@ node scripts/<name>.mjs [args]
 | `list-users.mjs` | Lists last 10 `public.users` + `auth.users` (emails masked). |
 | `user-history.mjs [email]` | Full state dump for one athlete: user row, integrations, sync runs, planned sessions, plan matches, auth record. Defaults to `scottsimpsonlax29@gmail.com`. |
 | `audit-cross-coach.mjs [email]` | Cross-coach state: biomarkers, recovery, today's + last-14-days `daily_summaries`, plans, workouts, health events. |
+| `oura-status.mjs [email]` | Is Oura actually updating? Shows the integration row (status, token expiry, `last_synced_at`), recent `sync_runs`, and the latest `recovery_daily` rows by source. |
 | `pending-migrations-007-009-010.sql` | The 007+009+010 bundle applied via the dashboard SQL editor on 2026-05-29/30. Idempotent. Mirrors `supabase/migrations/`. |
 | `apply-pending-migrations.mjs` | Direct-`pg` migration applier. **Requires** a real `postgresql://` pooler string in `DATABASE_URL` (or `SUPABASE_DB_URL` / `PGHOST`+`PGPASSWORD`). It rejects the REST URL with a clear message — note `DATABASE_URL` in `.env.local` is currently that REST URL, so paste the Session-mode pooler string first. The dashboard-paste path (the `.sql` bundle above) is the working route today. |

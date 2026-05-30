@@ -151,6 +151,16 @@ npm run test --workspace @performance-os/web   # vitest run
     acknowledged with a 200 and dropped (fails closed). Strava cannot
     carry a Supabase session, so this is a documented exception to
     cookie auth.
+  - `GET /api/cron/sync-oura` is the scheduled Oura recovery sync
+    (Vercel Cron, daily — see `vercel.json`). It authenticates via
+    `Authorization: Bearer ${CRON_SECRET}`, NOT cookies — there is no
+    athlete session on a cron invocation. It runs under the service-role
+    client and iterates ALL active Oura integrations, calling
+    `syncOuraRecovery` per athlete (per-user errors isolated so one bad
+    refresh token can't abort the batch). Fails closed: 500 if
+    `CRON_SECRET` is unset, 401 on header mismatch. This is the one place
+    a route legitimately reads every athlete's data, because it acts as
+    the system, not as an athlete.
 - Two athletes signed into the same deployment must never read or
   write each other's data through browser flows.
 
@@ -813,6 +823,32 @@ Failure is logged and non-fatal — the next sync re-tries.
     context-load failure → 500, persistence failure → 200 with
     message intact).
 - **Plan doc:** `docs/plans/2026-05-23-longevity-guru-chat.md`.
+
+### 11. Scheduled Oura recovery sync — done (2026-05-30)
+- **Problem.** Oura has no webhook (unlike Strava). `/api/sync/oura` only
+  runs on the manual "Sync now" button, so recovery data went stale —
+  the live athlete's `recovery_daily` hadn't advanced past 2026-05-05
+  (25 days), with zero `sync_runs` ever recorded, even though the
+  integration was `status: active` with a valid token.
+- **Fix shipped:**
+  - `GET /api/cron/sync-oura` — service-role route that lists all active
+    Oura integrations and calls `syncOuraRecovery` per athlete, isolating
+    per-user failures. `syncOuraRecovery` resolves its own date range
+    from each integration's `last_synced_at`, so the first run backfills
+    the whole gap in one shot.
+  - `vercel.json` (repo root) — daily cron at `0 11 * * *` hitting that
+    path. (Hobby plan allows daily crons.)
+  - `lib/env.ts::requireCronSecret` — `CRON_SECRET` accessor; route fails
+    closed (500 unset / 401 mismatch). Vercel auto-sends the bearer when
+    `CRON_SECRET` is set on the project.
+  - Tests: `tests/cron-sync-oura-route.test.ts` (secret-unset 500, bad
+    bearer 401, multi-integration happy path, per-athlete failure
+    isolation, list-error 500).
+  - Docs: `.env.example` `CRON_SECRET`, `docs/deploy.md` cron section.
+- **Still open:** Oura backfill rows have null `hrv_ms` / `resting_hr`
+  (only readiness + sleep scores populate) — a field-mapping gap in
+  `lib/oura/recovery-sync.ts` to investigate separately. Set `CRON_SECRET`
+  in Vercel for the cron to run in production.
 
 ### 10. Plan docs index (existing)
 - `docs/plans/2026-05-04-training-import-and-adaptive-coach.md`

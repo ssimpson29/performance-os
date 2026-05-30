@@ -143,3 +143,26 @@ export function requireStravaWebhookVerifyToken() {
   }
   return stravaWebhookVerifyToken;
 }
+
+function readCronEnv() {
+  return {
+    cronSecret: process.env.CRON_SECRET,
+  };
+}
+
+/**
+ * Shared secret for scheduled (Vercel Cron) endpoints. Vercel automatically
+ * sends `Authorization: Bearer ${CRON_SECRET}` on cron invocations when this
+ * var is set in the project. The cron routes fail closed when it is unset, so
+ * a scheduled endpoint never runs unauthenticated. Generate with
+ * `openssl rand -hex 32`.
+ */
+export function requireCronSecret() {
+  const { cronSecret } = readCronEnv();
+  if (!cronSecret) {
+    throw new Error(
+      'Missing CRON_SECRET. Set it (e.g. `openssl rand -hex 32`) so scheduled cron endpoints can authenticate.',
+    );
+  }
+  return cronSecret;
+}
