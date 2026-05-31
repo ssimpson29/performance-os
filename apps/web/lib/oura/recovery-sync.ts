@@ -23,8 +23,17 @@ type IntegrationRecord = {
 type NormalizeOuraRecoveryRowsInput = {
   userId: string;
   readinessRecords: OuraRecord[];
+  /** daily_sleep documents — score + contributors only. */
   sleepRecords: OuraRecord[];
   activityRecords: OuraRecord[];
+  /**
+   * Detailed sleep-period documents (/usercollection/sleep). The only source
+   * of raw average_hrv (ms), lowest_heart_rate (bpm), total_sleep_duration
+   * (s), and average_breath. Multiple per day (naps + main sleep); the main
+   * sleep is the longest period. Optional for back-compat with callers/tests
+   * that don't pass it (those rows just keep null HRV/HR, as before).
+   */
+  detailedSleepRecords?: OuraRecord[];
 };
 
 type RecoveryFlag = 'green' | 'yellow' | 'red';
@@ -48,6 +57,7 @@ type RecoveryDailyRow = {
       readiness: OuraRecord | null;
       sleep: OuraRecord | null;
       activity: OuraRecord | null;
+      detailedSleep?: OuraRecord | null;
     };
   };
 };
@@ -143,6 +153,7 @@ export function normalizeOuraRecoveryRows({
   readinessRecords,
   sleepRecords,
   activityRecords,
+  detailedSleepRecords = [],
 }: NormalizeOuraRecoveryRowsInput): RecoveryDailyRow[] {
   const byDay = new Map<
     string,
@@ -150,14 +161,34 @@ export function normalizeOuraRecoveryRows({
       readiness: OuraRecord | null;
       sleep: OuraRecord | null;
       activity: OuraRecord | null;
+      detailedSleep: OuraRecord | null;
     }
   >();
+
+  const emptyEntry = () => ({ readiness: null, sleep: null, activity: null, detailedSleep: null });
 
   const ingest = (type: 'readiness' | 'sleep' | 'activity', records: OuraRecord[]) => {
     for (const record of records) {
       if (!record.day || !isIsoDay(record.day)) continue;
-      const current = byDay.get(record.day) ?? { readiness: null, sleep: null, activity: null };
+      const current = byDay.get(record.day) ?? emptyEntry();
       current[type] = record;
+      byDay.set(record.day, current);
+    }
+  };
+
+  // Detailed sleep can have several periods per day (main sleep + naps). Keep
+  // the longest as the night's main sleep — that's what carries the
+  // representative HRV / resting HR / duration. Skip deleted documents.
+  const ingestDetailedSleep = (records: OuraRecord[]) => {
+    for (const record of records) {
+      if (!record.day || !isIsoDay(record.day)) continue;
+      if (record.type === 'deleted') continue;
+      const current = byDay.get(record.day) ?? emptyEntry();
+      const incoming = numberOrNull(record.total_sleep_duration) ?? 0;
+      const existing = numberOrNull(current.detailedSleep?.total_sleep_duration) ?? -1;
+      if (!current.detailedSleep || incoming > existing) {
+        current.detailedSleep = record;
+      }
       byDay.set(record.day, current);
     }
   };
@@ -165,6 +196,7 @@ export function normalizeOuraRecoveryRows({
   ingest('readiness', readinessRecords);
   ingest('sleep', sleepRecords);
   ingest('activity', activityRecords);
+  ingestDetailedSleep(detailedSleepRecords);
 
   return [...byDay.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
@@ -173,6 +205,11 @@ export function normalizeOuraRecoveryRows({
       const sleepScore = integerOrNull(records.sleep?.score);
       const activityScore = integerOrNull(records.activity?.score);
 
+      // Raw physiological values live on the detailed sleep period, not on
+      // daily_sleep. Prefer it; fall back to the legacy daily_sleep/readiness
+      // lookups so nothing regresses when detailed sleep is absent.
+      const sleepForVitals = records.detailedSleep ?? records.sleep;
+
       return {
         user_id: userId,
         source: 'oura',
@@ -180,11 +217,13 @@ export function normalizeOuraRecoveryRows({
         readiness_score: readinessScore,
         sleep_score: sleepScore,
         activity_score: activityScore,
-        sleep_duration_minutes: minutesFromSeconds(records.sleep?.total_sleep_duration),
-        hrv_ms: getHrv(records.sleep, records.readiness),
-        resting_hr: getRestingHr(records.sleep, records.readiness),
-        body_temperature_delta: getBodyTemperatureDelta(records.readiness, records.sleep),
-        respiratory_rate: getRespiratoryRate(records.sleep),
+        sleep_duration_minutes: minutesFromSeconds(
+          records.detailedSleep?.total_sleep_duration ?? records.sleep?.total_sleep_duration,
+        ),
+        hrv_ms: getHrv(sleepForVitals, records.readiness),
+        resting_hr: getRestingHr(sleepForVitals, records.readiness),
+        body_temperature_delta: getBodyTemperatureDelta(records.readiness, sleepForVitals),
+        respiratory_rate: getRespiratoryRate(sleepForVitals),
         strain_score: getStrainScore(records.activity),
         flag: deriveRecoveryFlag(readinessScore ?? sleepScore),
         metadata: {
@@ -192,6 +231,7 @@ export function normalizeOuraRecoveryRows({
             readiness: records.readiness,
             sleep: records.sleep,
             activity: records.activity,
+            detailedSleep: records.detailedSleep,
           },
         },
       };
@@ -277,7 +317,10 @@ async function refreshOuraAccessToken(
 
 async function fetchOuraCollection(
   fetchImpl: typeof fetch,
-  collection: 'daily_readiness' | 'daily_sleep' | 'daily_activity',
+  // 'sleep' is the detailed sleep-period collection — the ONLY source of raw
+  // average_hrv / lowest_heart_rate / total_sleep_duration / average_breath.
+  // 'daily_sleep' carries only the 0-100 score + contributors.
+  collection: 'daily_readiness' | 'daily_sleep' | 'daily_activity' | 'sleep',
   accessToken: string,
   startDate: string,
   endDate: string,
@@ -393,10 +436,11 @@ export async function syncOuraRecovery(
     now,
   });
 
-  const [readinessRecords, sleepRecords, activityRecords] = await Promise.all([
+  const [readinessRecords, sleepRecords, activityRecords, detailedSleepRecords] = await Promise.all([
     fetchOuraCollection(fetchImpl, 'daily_readiness', accessToken, range.startDate, range.endDate),
     fetchOuraCollection(fetchImpl, 'daily_sleep', accessToken, range.startDate, range.endDate),
     fetchOuraCollection(fetchImpl, 'daily_activity', accessToken, range.startDate, range.endDate),
+    fetchOuraCollection(fetchImpl, 'sleep', accessToken, range.startDate, range.endDate),
   ]);
 
   const rows = normalizeOuraRecoveryRows({
@@ -404,6 +448,7 @@ export async function syncOuraRecovery(
     readinessRecords,
     sleepRecords,
     activityRecords,
+    detailedSleepRecords,
   });
 
   if (rows.length > 0) {

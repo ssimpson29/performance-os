@@ -847,10 +847,17 @@ Failure is logged and non-fatal — the next sync re-tries.
     bearer 401, multi-integration happy path, per-athlete failure
     isolation, list-error 500).
   - Docs: `.env.example` `CRON_SECRET`, `docs/deploy.md` cron section.
-- **Still open:** Oura backfill rows have null `hrv_ms` / `resting_hr`
-  (only readiness + sleep scores populate) — a field-mapping gap in
-  `lib/oura/recovery-sync.ts` to investigate separately. Set `CRON_SECRET`
-  in Vercel for the cron to run in production.
+- **HRV / resting-HR mapping — fixed (2026-05-30).** Earlier rows had null
+  `hrv_ms` / `resting_hr` / `sleep_duration_minutes` / `respiratory_rate`
+  because the sync read those off the `daily_sleep` document, which carries
+  only the 0-100 score + contributors. The raw values live on Oura's detailed
+  `/usercollection/sleep` periods. `syncOuraRecovery` now also fetches `sleep`,
+  `normalizeOuraRecoveryRows` takes `detailedSleepRecords`, picks the longest
+  period per day (main sleep, not a nap), and sources HRV / lowest-HR /
+  duration / breath from it (daily_sleep still supplies the score). The next
+  sync re-upserts existing days, so historical rows backfill on their own.
+- **Still open:** set `CRON_SECRET` in Vercel for the daily cron to run in
+  production.
 
 ### 10. Plan docs index (existing)
 - `docs/plans/2026-05-04-training-import-and-adaptive-coach.md`

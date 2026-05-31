@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { normalizeOuraRecoveryRows, syncOuraRecovery } from '../lib/oura/recovery-sync';
 
 describe('normalizeOuraRecoveryRows', () => {
-  it('merges readiness, sleep, and activity payloads into recovery_daily upsert rows', () => {
+  it('sources HRV / resting HR / duration / respiratory from the detailed sleep period, score from daily_sleep', () => {
     const rows = normalizeOuraRecoveryRows({
       userId: 'user-123',
       readinessRecords: [
@@ -14,21 +14,18 @@ describe('normalizeOuraRecoveryRows', () => {
           contributors: { previous_night: 90 },
         },
       ],
-      sleepRecords: [
+      // daily_sleep carries the score + contributors only — no raw vitals.
+      sleepRecords: [{ day: '2026-05-04', score: 82 }],
+      activityRecords: [{ day: '2026-05-04', score: 78, strain: 12.5 }],
+      // The raw physiological values live on the detailed sleep period.
+      detailedSleepRecords: [
         {
           day: '2026-05-04',
-          score: 82,
+          type: 'long_sleep',
           total_sleep_duration: 27000,
           average_hrv: 44.7,
           lowest_heart_rate: 51,
           average_breath: 14.2,
-        },
-      ],
-      activityRecords: [
-        {
-          day: '2026-05-04',
-          score: 78,
-          strain: 12.5,
         },
       ],
     });
@@ -56,23 +53,34 @@ describe('normalizeOuraRecoveryRows', () => {
               temperature_deviation: 0.18,
               contributors: { previous_night: 90 },
             },
-            sleep: {
+            sleep: { day: '2026-05-04', score: 82 },
+            activity: { day: '2026-05-04', score: 78, strain: 12.5 },
+            detailedSleep: {
               day: '2026-05-04',
-              score: 82,
+              type: 'long_sleep',
               total_sleep_duration: 27000,
               average_hrv: 44.7,
               lowest_heart_rate: 51,
               average_breath: 14.2,
             },
-            activity: {
-              day: '2026-05-04',
-              score: 78,
-              strain: 12.5,
-            },
           },
         },
       },
     ]);
+  });
+
+  it('keeps the longest sleep period per day (main sleep, not a nap)', () => {
+    const rows = normalizeOuraRecoveryRows({
+      userId: 'user-123',
+      readinessRecords: [{ day: '2026-05-04', score: 80 }],
+      sleepRecords: [{ day: '2026-05-04', score: 80 }],
+      activityRecords: [],
+      detailedSleepRecords: [
+        { day: '2026-05-04', type: 'late_nap', total_sleep_duration: 3000, average_hrv: 20, lowest_heart_rate: 70 },
+        { day: '2026-05-04', type: 'long_sleep', total_sleep_duration: 27000, average_hrv: 48, lowest_heart_rate: 49 },
+      ],
+    });
+    expect(rows[0]).toMatchObject({ hrv_ms: 48, resting_hr: 49, sleep_duration_minutes: 450 });
   });
 
   it('applies explainable defaults when only partial Oura records are available', () => {
@@ -139,6 +147,21 @@ describe('syncOuraRecovery', () => {
         json: async () => ({
           data: [{ day: '2026-05-04', score: 78, strain: 12.5 }],
         }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: [
+            {
+              day: '2026-05-04',
+              type: 'long_sleep',
+              total_sleep_duration: 27000,
+              average_hrv: 44.7,
+              lowest_heart_rate: 51,
+              average_breath: 14.2,
+            },
+          ],
+        }),
       });
 
     const integrationState = {
@@ -204,7 +227,7 @@ describe('syncOuraRecovery', () => {
       now: new Date('2026-05-06T10:00:00.000Z'),
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(fetchMock.mock.calls[0][0]).toBe(
       'https://api.ouraring.com/v2/usercollection/daily_readiness?start_date=2026-05-02&end_date=2026-05-06',
     );
@@ -213,6 +236,9 @@ describe('syncOuraRecovery', () => {
     );
     expect(fetchMock.mock.calls[2][0]).toBe(
       'https://api.ouraring.com/v2/usercollection/daily_activity?start_date=2026-05-02&end_date=2026-05-06',
+    );
+    expect(fetchMock.mock.calls[3][0]).toBe(
+      'https://api.ouraring.com/v2/usercollection/sleep?start_date=2026-05-02&end_date=2026-05-06',
     );
     expect(recoveryUpsert).toHaveBeenCalledWith(
       [
@@ -223,6 +249,11 @@ describe('syncOuraRecovery', () => {
           readiness_score: 86,
           sleep_score: 82,
           activity_score: 78,
+          // The fix: raw vitals now populate from the detailed sleep period.
+          hrv_ms: 44.7,
+          resting_hr: 51,
+          sleep_duration_minutes: 450,
+          respiratory_rate: 14.2,
         }),
       ],
       { onConflict: 'user_id,source,day' },
@@ -260,6 +291,7 @@ describe('syncOuraRecovery', () => {
           expires_in: 7200,
         }),
       })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ data: [] }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ data: [] }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ data: [] }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ data: [] }) });
