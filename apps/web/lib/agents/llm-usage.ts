@@ -78,7 +78,7 @@ export function createUsageTracker(): UsageTracker {
 
 /**
  * Emit one structured usage line for an agent run. Returns the estimated cost
- * so a caller can additionally persist it (e.g. to an llm_usage table) later.
+ * so a caller can additionally persist it (e.g. to the llm_usage table).
  */
 export function logLlmUsage(args: {
   userId: string;
@@ -102,4 +102,103 @@ export function logLlmUsage(args: {
     })}`,
   );
   return costUsd;
+}
+
+// Minimal surface of the supabase client this module needs — keeps it
+// decoupled + easy to stub in tests.
+type SupabaseLike = { from: (table: string) => any };
+
+/**
+ * Best-effort insert of one usage row into public.llm_usage. Logged-and-ignored
+ * on failure (e.g. migration 011 not yet applied) so it never breaks a coach
+ * turn. Returns true on a successful write.
+ */
+export async function persistLlmUsage(
+  supabase: SupabaseLike,
+  args: { userId: string; surface: string; model: string; tracker: UsageTracker; costUsd: number },
+): Promise<boolean> {
+  const { userId, surface, model, tracker, costUsd } = args;
+  const usage = tracker.usage;
+  try {
+    const res = await supabase.from('llm_usage').insert?.({
+      user_id: userId,
+      surface,
+      model,
+      prompt_tokens: usage.promptTokens,
+      completion_tokens: usage.completionTokens,
+      total_tokens: usage.totalTokens,
+      iterations: tracker.iterations,
+      est_cost_usd: Number(costUsd.toFixed(6)),
+    });
+    if (res?.error) {
+      console.warn('[llm-usage] persist failed:', res.error.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('[llm-usage] persist threw:', err instanceof Error ? err.message : String(err));
+    return false;
+  }
+}
+
+/**
+ * Log the usage line AND persist it (when a supabase client is provided).
+ * The single entry point agent loops should call at end-of-run.
+ */
+export async function recordLlmUsage(
+  supabase: SupabaseLike | null | undefined,
+  args: { userId: string; surface: string; model: string; tracker: UsageTracker },
+): Promise<number> {
+  const costUsd = logLlmUsage(args);
+  if (supabase) await persistLlmUsage(supabase, { ...args, costUsd });
+  return costUsd;
+}
+
+/** UTC start-of-day ISO for `now`. */
+function startOfUtcDay(now: Date): string {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
+}
+
+/** Sum of est_cost_usd for the athlete since UTC midnight. 0 on any error. */
+export async function getTodaySpendUsd(
+  supabase: SupabaseLike,
+  userId: string,
+  now: Date = new Date(),
+): Promise<number> {
+  try {
+    const { data, error } = await supabase
+      .from('llm_usage')
+      .select('est_cost_usd')
+      .eq('user_id', userId)
+      .gte('created_at', startOfUtcDay(now));
+    if (error) return 0;
+    return ((data as Array<{ est_cost_usd: number | string | null }> | null) ?? []).reduce(
+      (sum, r) => sum + Number(r.est_cost_usd ?? 0),
+      0,
+    );
+  } catch {
+    return 0;
+  }
+}
+
+/** Daily per-user USD ceiling, or null when disabled (env unset / invalid). */
+export function dailyCeilingUsd(): number | null {
+  const raw = Number(process.env.AI_COACH_DAILY_USD_CEILING);
+  return Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+
+/**
+ * Check whether the athlete is under their daily spend ceiling. When no
+ * ceiling is configured this always allows (ceilingUsd: null) — opt-in only,
+ * so it never blocks until you set AI_COACH_DAILY_USD_CEILING.
+ */
+export async function checkSpendCeiling(
+  supabase: SupabaseLike,
+  userId: string,
+  now: Date = new Date(),
+): Promise<{ allowed: boolean; spentUsd: number; ceilingUsd: number | null }> {
+  const ceilingUsd = dailyCeilingUsd();
+  if (ceilingUsd === null) return { allowed: true, spentUsd: 0, ceilingUsd: null };
+  const spentUsd = await getTodaySpendUsd(supabase, userId, now);
+  return { allowed: spentUsd < ceilingUsd, spentUsd, ceilingUsd };
 }

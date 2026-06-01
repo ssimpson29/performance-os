@@ -192,10 +192,19 @@ The system prompt gives the LLM agency rather than restricting it to "translate 
 - `maxToolIterations()` (default 5, env `AI_COACH_MAX_TOOL_ITERATIONS`) caps the
   tool-loop round-trips in training-coach + longevity-chat so a misbehaving
   loop can't run away on tokens.
-- `lib/agents/llm-usage.ts` — `createUsageTracker()` + `logLlmUsage()` emit one
+- `lib/agents/llm-usage.ts` — `createUsageTracker()` + `recordLlmUsage()` emit one
   structured `[llm-usage]` line per agent run (surface, userId, model, tokens,
-  est USD). Wired into the two tool loops; grep `[llm-usage]` for per-user
-  spend. New LLM surfaces should adopt the same tracker + log.
+  est USD) AND persist a row to `public.llm_usage` (migration `011`). Wired into
+  the three recurring surfaces (coach-chat, longevity-chat, todays-call). New
+  LLM surfaces should adopt the same tracker + `recordLlmUsage`. NOTE: the two
+  single-shot paths (longevity-eval, image-extraction) are not yet
+  instrumented — their functions are intentionally supabase-free; threading
+  usage out to their routes is a small follow-up.
+- **Daily spend ceiling.** `checkSpendCeiling(supabase, userId)` sums today's
+  `llm_usage.est_cost_usd` and compares to `AI_COACH_DAILY_USD_CEILING`.
+  **Opt-in** — when the env is unset it always allows (no query). Enforced in
+  `/api/coach/message` + `/api/longevity/message` (429 when exceeded). Requires
+  migration `011_llm_usage` applied in prod.
 
 **Longevity Guru** (strategic, healthspan-driven):
 1. **Deterministic engine** — `apps/web/lib/longevity/{reference-ranges,trend-detection,prioritization}.ts`

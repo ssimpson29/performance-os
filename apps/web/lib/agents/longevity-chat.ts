@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { buildSystemPrompt as buildBaseLongevityPrompt } from './longevity-guru';
 import { maxToolIterations, resolveModel } from './llm-model';
-import { createUsageTracker, logLlmUsage, type RawUsage } from './llm-usage';
+import { createUsageTracker, recordLlmUsage, type RawUsage } from './llm-usage';
 import {
   createSoulUpdatedRef,
   executeLongevityTool,
@@ -265,7 +265,12 @@ async function runAgentLoop(
   if (result.message === null && tracker.iterations >= maxIterations) {
     console.error(`[longevity-chat] agent loop hit the ${maxIterations}-iteration cap`);
   }
-  logLlmUsage({ userId: ctx.userId, surface: 'longevity-chat', model: env.model, tracker });
+  await recordLlmUsage(handlerContext.supabase, {
+    userId: ctx.userId,
+    surface: 'longevity-chat',
+    model: env.model,
+    tracker,
+  });
   return result;
 }
 

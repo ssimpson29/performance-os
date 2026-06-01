@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { loadAthleteContext } from '@/lib/agents/athlete-context';
+import { checkSpendCeiling } from '@/lib/agents/llm-usage';
 import { runTrainingCoach } from '@/lib/agents/training-coach';
 import { persistTrainingCoachRun } from '@/lib/agents/training-coach-persistence';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -41,6 +42,18 @@ export async function POST(request: Request) {
 
   const supabase = createServerSupabaseClient();
   const today = new Date().toISOString().slice(0, 10);
+
+  // Daily spend ceiling (no-op unless AI_COACH_DAILY_USD_CEILING is set).
+  const ceiling = await checkSpendCeiling(supabase, userId);
+  if (!ceiling.allowed) {
+    return NextResponse.json(
+      {
+        error: `Daily AI limit reached ($${ceiling.ceilingUsd?.toFixed(2)}). Resets at UTC midnight.`,
+        spentUsd: Number(ceiling.spentUsd.toFixed(4)),
+      },
+      { status: 429 },
+    );
+  }
 
   let athleteContext;
   try {

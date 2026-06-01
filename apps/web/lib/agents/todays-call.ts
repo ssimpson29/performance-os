@@ -15,6 +15,7 @@ import {
   type ToolHandlerContext,
 } from './coach-tools';
 import { resolveModel } from './llm-model';
+import { createUsageTracker, recordLlmUsage, type RawUsage } from './llm-usage';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -97,6 +98,7 @@ type OpenAICompletion = {
     };
     finish_reason?: string;
   }>;
+  usage?: RawUsage;
 };
 
 const MAX_ITERATIONS = 6;
@@ -347,15 +349,20 @@ async function runComposerLoop(
 
   // Agent loop — same shape as training-coach.ts. The LLM is allowed
   // to call any tool in the coach registry to dig deeper before
-  // emitting the final JSON.
+  // emitting the final JSON. Single-exit so usage is recorded on every path.
+  const tracker = createUsageTracker();
+  let composed: string | null = null;
+
   for (let iter = 0; iter < MAX_ITERATIONS; iter += 1) {
+    tracker.addIteration();
     const completion = await callLlmChatCompletion(env, messages);
-    if (!completion) return null;
+    if (!completion) break;
+    tracker.add(completion.usage);
     const choice = completion.choices?.[0];
     const assistantMessage = choice?.message;
     if (!assistantMessage) {
       console.error('[todays-call] LLM returned no message.choices[0].message');
-      return null;
+      break;
     }
     const toolCalls = assistantMessage.tool_calls;
     if (toolCalls && toolCalls.length > 0) {
@@ -375,12 +382,22 @@ async function runComposerLoop(
     const text = assistantMessage.content?.trim() ?? '';
     if (!text) {
       console.error('[todays-call] LLM returned empty content with no tool_calls');
-      return null;
+      break;
     }
-    return text;
+    composed = text;
+    break;
   }
-  console.error(`[todays-call] composer loop exceeded ${MAX_ITERATIONS} iterations`);
-  return null;
+
+  if (composed === null && tracker.iterations >= MAX_ITERATIONS) {
+    console.error(`[todays-call] composer loop hit the ${MAX_ITERATIONS}-iteration cap`);
+  }
+  await recordLlmUsage(toolHandlerContext.supabase, {
+    userId: ctx.userId,
+    surface: 'todays-call',
+    model: env.model,
+    tracker,
+  });
+  return composed;
 }
 
 // ---------------------------------------------------------------------------

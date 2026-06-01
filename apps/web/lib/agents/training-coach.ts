@@ -11,7 +11,7 @@ import {
   type ToolHandlerContext,
 } from './coach-tools';
 import { maxToolIterations, resolveModel } from './llm-model';
-import { createUsageTracker, logLlmUsage, type RawUsage } from './llm-usage';
+import { createUsageTracker, recordLlmUsage, type RawUsage } from './llm-usage';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -582,7 +582,12 @@ async function runAgentLoop(
   }
   // planCommitted may have flipped after `result` was initialized; keep it fresh.
   result.planCommitted = planCommitted;
-  logLlmUsage({ userId: ctx.userId, surface: 'coach-chat', model: env.model, tracker });
+  await recordLlmUsage(toolHandlerContext.supabase, {
+    userId: ctx.userId,
+    surface: 'coach-chat',
+    model: env.model,
+    tracker,
+  });
   return result;
 }
 
