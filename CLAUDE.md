@@ -174,10 +174,14 @@ require a third party to stop retaining provider data on disconnect):
 - strava → deletes `workouts` where `source='strava'`,
 - both → delete the provider's `sync_runs` + the `user_integrations` row.
 Athlete-scoped, idempotent. UI: `DisconnectIntegrationButton` (two-step
-confirm) on the Oura + Strava cards. **Known gaps (follow-ups):** (1) a Strava
+confirm) on the Oura + Strava cards. On Strava disconnect the route also
+revokes our authorization at Strava (`lib/strava/deauthorize.ts`, best-effort,
+before the row is deleted), and Strava's **deauthorization webhook**
+(`object_type='athlete'`, `updates.authorized='false'` →
+`/api/webhooks/strava`) calls `disconnectIntegration` to delete the athlete's
+Strava data when they revoke us from Strava's side. **Known gap:** a Strava
 description forwarded onto a canonical Apple workout row isn't scrubbed (no
-per-field provenance); (2) we don't yet revoke the token at the provider
-(Strava deauthorize) or handle Strava's deauthorization webhook.
+per-field provenance). Privacy/disclosure draft: `docs/privacy-policy.md`.
 
 ### Third-party-LLM data consent (#2 part B)
 The agents send wearable/lab/health data to an OpenAI-compatible API; Apple

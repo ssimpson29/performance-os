@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { requireStravaEnv, requireStravaWebhookVerifyToken } from '@/lib/env';
+import { disconnectIntegration } from '@/lib/integrations/disconnect';
 import {
   handleStravaActivityEvent,
   loadStravaIntegrationByOwnerId,
@@ -78,9 +79,31 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: 'invalid_json' }, { status: 400 });
   }
 
-  // Ack non-activity events (athlete deauthorization events use
-  // object_type='athlete'). We currently don't process those; respond 200
-  // so Strava doesn't retry.
+  // Athlete deauthorization: Strava sends object_type='athlete' with
+  // updates.authorized='false' when the athlete revokes us from their side.
+  // Terms-compliant response: delete the data we ingested from Strava. The
+  // token is already dead at Strava, so we don't call deauthorize again.
+  if (body.object_type === 'athlete' && String(body.updates?.authorized) === 'false') {
+    if (body.owner_id == null) {
+      return NextResponse.json({ ok: true, ignored: 'deauth_missing_owner' });
+    }
+    const supabase = createServerSupabaseClient();
+    try {
+      const binding = await loadStravaIntegrationByOwnerId(supabase, body.owner_id);
+      if (!binding) {
+        return NextResponse.json({ ok: true, ignored: 'deauth_unknown_owner' });
+      }
+      const result = await disconnectIntegration(supabase, { userId: binding.userId, provider: 'strava' });
+      return NextResponse.json({ ok: true, deauthorized: true, result });
+    } catch (err) {
+      console.error('POST /api/webhooks/strava deauthorization failed:', err);
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    }
+  }
+
+  // Ack other non-activity events (we don't process them) so Strava
+  // doesn't retry.
   if (body.object_type !== 'activity') {
     return NextResponse.json({ ok: true, ignored: 'non_activity_event' });
   }

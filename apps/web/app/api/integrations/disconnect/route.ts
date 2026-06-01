@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 
 import { disconnectIntegration, type DisconnectableProvider } from '@/lib/integrations/disconnect';
 import { getAuthenticatedUserId } from '@/lib/server-auth';
+import { deauthorizeStravaForUser } from '@/lib/strava/deauthorize';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 
 const PROVIDERS: ReadonlySet<DisconnectableProvider> = new Set(['oura', 'strava']);
@@ -31,6 +32,11 @@ export async function POST(request: Request) {
 
   try {
     const supabase = createServerSupabaseClient();
+    // Revoke at Strava BEFORE deleting the integration row (it needs the
+    // token). Best-effort — data deletion below is what compliance requires.
+    if (provider === 'strava') {
+      await deauthorizeStravaForUser(supabase, userId);
+    }
     const result = await disconnectIntegration(supabase, {
       userId,
       provider: provider as DisconnectableProvider,

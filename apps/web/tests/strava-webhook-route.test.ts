@@ -3,10 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const createServerSupabaseClient = vi.fn();
 const loadStravaIntegrationByOwnerId = vi.fn();
 const handleStravaActivityEvent = vi.fn();
+const disconnectIntegration = vi.fn();
 
 vi.mock('@/lib/supabase-server', () => ({
   createServerSupabaseClient,
 }));
+
+vi.mock('@/lib/integrations/disconnect', () => ({ disconnectIntegration }));
 
 vi.mock('@/lib/strava/activity-sync', async () => {
   const actual = await vi.importActual<typeof import('@/lib/strava/activity-sync')>(
@@ -75,6 +78,37 @@ describe('POST /api/webhooks/strava (event handler)', () => {
     process.env.STRAVA_CLIENT_SECRET = 'strava-secret';
     process.env.STRAVA_WEBHOOK_VERIFY_TOKEN = 'expected-token';
     createServerSupabaseClient.mockReturnValue({ marker: 'supabase' });
+  });
+
+  it('on athlete deauthorization, deletes the Strava data for that owner', async () => {
+    loadStravaIntegrationByOwnerId.mockResolvedValue({ userId: 'u1', integration: { id: 'i1' } });
+    disconnectIntegration.mockResolvedValue({
+      provider: 'strava',
+      deletedWorkouts: 12,
+      deletedRecovery: 0,
+      deletedSyncRuns: 2,
+      integrationRemoved: true,
+    });
+    const { POST } = await import('../app/api/webhooks/strava/route');
+    const response = await POST(
+      makePostRequest({ object_type: 'athlete', aspect_type: 'update', owner_id: 999, updates: { authorized: 'false' } }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ ok: true, deauthorized: true });
+    expect(disconnectIntegration).toHaveBeenCalledWith(expect.anything(), { userId: 'u1', provider: 'strava' });
+    expect(handleStravaActivityEvent).not.toHaveBeenCalled();
+  });
+
+  it('acks an athlete deauthorization for an unknown owner', async () => {
+    loadStravaIntegrationByOwnerId.mockResolvedValue(null);
+    const { POST } = await import('../app/api/webhooks/strava/route');
+    const response = await POST(
+      makePostRequest({ object_type: 'athlete', owner_id: 5, updates: { authorized: 'false' } }),
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ ok: true, ignored: 'deauth_unknown_owner' });
+    expect(disconnectIntegration).not.toHaveBeenCalled();
   });
 
   it('acks non-activity events without touching the integration', async () => {
