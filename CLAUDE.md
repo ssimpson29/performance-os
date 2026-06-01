@@ -195,11 +195,10 @@ The system prompt gives the LLM agency rather than restricting it to "translate 
 - `lib/agents/llm-usage.ts` — `createUsageTracker()` + `recordLlmUsage()` emit one
   structured `[llm-usage]` line per agent run (surface, userId, model, tokens,
   est USD) AND persist a row to `public.llm_usage` (migration `011`). Wired into
-  the three recurring surfaces (coach-chat, longevity-chat, todays-call). New
-  LLM surfaces should adopt the same tracker + `recordLlmUsage`. NOTE: the two
-  single-shot paths (longevity-eval, image-extraction) are not yet
-  instrumented — their functions are intentionally supabase-free; threading
-  usage out to their routes is a small follow-up.
+  ALL five surfaces: coach-chat, longevity-chat, todays-call (tracker in the
+  loop), plus longevity-eval and image-extraction (which take optional
+  `userId` + `supabase` on their input and record the single call). New LLM
+  surfaces should adopt the same tracker + `recordLlmUsage`.
 - **Daily spend ceiling.** `checkSpendCeiling(supabase, userId)` sums today's
   `llm_usage.est_cost_usd` and compares to `AI_COACH_DAILY_USD_CEILING`.
   **Opt-in** — when the env is unset it always allows (no query). Enforced in

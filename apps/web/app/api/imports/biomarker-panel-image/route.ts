@@ -9,6 +9,7 @@ import {
 import { getMarkerSpec } from '@/lib/longevity/reference-ranges';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { getAuthenticatedUserId } from '@/lib/server-auth';
+import { createServerSupabaseClient } from '@/lib/supabase-server';
 
 // Vision-capable chat completions APIs accept image MIME types via the
 // `image_url` content type, and PDFs via the `file` content type
@@ -81,6 +82,15 @@ export async function POST(request: Request) {
   const arrayBuf = await file.arrayBuffer();
   const imageBase64 = Buffer.from(arrayBuf).toString('base64');
 
+  // Best-effort supabase for usage telemetry only — never let it block
+  // extraction (e.g. missing service env in a non-prod context).
+  let usageSupabase;
+  try {
+    usageSupabase = createServerSupabaseClient();
+  } catch {
+    usageSupabase = undefined;
+  }
+
   let extracted;
   try {
     extracted = await extractPanelFromImage({
@@ -90,6 +100,8 @@ export async function POST(request: Request) {
       // Pass the original upload name; fall back to a generic when the
       // browser somehow sent an empty name.
       filename: file.name || 'lab-report',
+      userId,
+      supabase: usageSupabase,
     });
   } catch (err) {
     // Vision LLM threw — propagate the real error (API rejection, timeout,

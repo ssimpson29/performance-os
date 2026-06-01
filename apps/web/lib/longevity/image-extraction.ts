@@ -11,7 +11,10 @@
  * maps to our canonical keys.
  */
 
+import type { SupabaseClient } from '@supabase/supabase-js';
+
 import { resolveModel } from '@/lib/agents/llm-model';
+import { createUsageTracker, recordLlmUsage, type RawUsage } from '@/lib/agents/llm-usage';
 
 import { REFERENCE_CATALOG } from './reference-ranges';
 
@@ -144,6 +147,9 @@ export async function extractPanelFromLabReport(args: {
   /** Original filename. Required by OpenAI for the `file` content type;
    * defaults to a generic name when omitted. */
   filename?: string;
+  /** For LLM usage telemetry (optional — omit to skip recording). */
+  userId?: string;
+  supabase?: SupabaseClient;
 }): Promise<RawExtractedPanel | null> {
   const env = readLlmEnv();
   if (!env) return null;
@@ -151,6 +157,7 @@ export async function extractPanelFromLabReport(args: {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 45_000);
   let raw: string | null = null;
+  let usage: RawUsage | undefined;
   try {
     const response = await fetch(`${env.baseUrl}/v1/chat/completions`, {
       method: 'POST',
@@ -192,8 +199,12 @@ export async function extractPanelFromLabReport(args: {
         `Vision LLM returned ${response.status} from ${env.model}: ${body.slice(0, 500) || '(empty body)'}`,
       );
     }
-    const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+      usage?: RawUsage;
+    };
     raw = data.choices?.[0]?.message?.content?.trim() ?? null;
+    usage = data.usage;
   } catch (err) {
     // Network / abort / API-error surface with the real cause. Env-missing
     // case never reaches this catch — handled by the early `return null`.
@@ -202,6 +213,20 @@ export async function extractPanelFromLabReport(args: {
   } finally {
     clearTimeout(timeout);
   }
+
+  // Record spend (vision is the priciest per-call surface). Best-effort.
+  if (args.userId) {
+    const tracker = createUsageTracker();
+    tracker.addIteration();
+    tracker.add(usage);
+    await recordLlmUsage(args.supabase ?? null, {
+      userId: args.userId,
+      surface: 'image-extraction',
+      model: env.model,
+      tracker,
+    });
+  }
+
   if (!raw) {
     throw new Error('Vision LLM returned an empty response');
   }
@@ -254,11 +279,15 @@ export async function extractPanelFromImage(args: {
   imageBase64: string;
   mimeType: string;
   filename?: string;
+  userId?: string;
+  supabase?: SupabaseClient;
 }): Promise<RawExtractedPanel | null> {
   return extractPanelFromLabReport({
     fileBase64: args.imageBase64,
     mimeType: args.mimeType,
     filename: args.filename,
+    userId: args.userId,
+    supabase: args.supabase,
   });
 }
 

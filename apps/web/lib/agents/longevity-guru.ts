@@ -21,7 +21,10 @@ import {
   type TrainingLoadSummary,
 } from '@/lib/training-plan/training-load-summary';
 
+import type { SupabaseClient } from '@supabase/supabase-js';
+
 import { resolveModel } from './llm-model';
+import { createUsageTracker, recordLlmUsage, type RawUsage } from './llm-usage';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -72,6 +75,9 @@ export type RunLongevityGuruInput = {
    * the guru a tool-calling loop and an updateLongevitySoul tool.
    */
   longevitySoul?: string;
+  /** For LLM usage telemetry (optional — omit to skip recording). */
+  userId?: string;
+  supabase?: SupabaseClient;
 };
 
 export type LongevityMarkerEvaluation = {
@@ -326,7 +332,11 @@ function buildUserPrompt(input: RunLongevityGuruInput, output: Omit<LongevityGur
   return lines.join('\n');
 }
 
-async function callLlm(env: LlmEnv, systemPrompt: string, userPrompt: string): Promise<string | null> {
+async function callLlm(
+  env: LlmEnv,
+  systemPrompt: string,
+  userPrompt: string,
+): Promise<{ content: string | null; usage?: RawUsage }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20_000);
   try {
@@ -352,11 +362,14 @@ async function callLlm(env: LlmEnv, systemPrompt: string, userPrompt: string): P
         max_completion_tokens: 2000,
       }),
     });
-    if (!response.ok) return null;
-    const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-    return data.choices?.[0]?.message?.content?.trim() ?? null;
+    if (!response.ok) return { content: null };
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+      usage?: RawUsage;
+    };
+    return { content: data.choices?.[0]?.message?.content?.trim() ?? null, usage: data.usage };
   } catch {
-    return null;
+    return { content: null };
   } finally {
     clearTimeout(timeout);
   }
@@ -412,11 +425,19 @@ export async function runLongevityGuru(input: RunLongevityGuruInput): Promise<Lo
   let llmInvoked = false;
   if (env) {
     llmInvoked = true;
-    narrative = await callLlm(
-      env,
-      buildSystemPrompt(input.longevitySoul),
-      buildUserPrompt(input, partialOutput),
-    );
+    const tracker = createUsageTracker();
+    tracker.addIteration();
+    const res = await callLlm(env, buildSystemPrompt(input.longevitySoul), buildUserPrompt(input, partialOutput));
+    narrative = res.content;
+    tracker.add(res.usage);
+    if (input.userId) {
+      await recordLlmUsage(input.supabase ?? null, {
+        userId: input.userId,
+        surface: 'longevity-eval',
+        model: env.model,
+        tracker,
+      });
+    }
   }
   if (!narrative) {
     narrative = deterministicNarrative(priorities, longevityContext);

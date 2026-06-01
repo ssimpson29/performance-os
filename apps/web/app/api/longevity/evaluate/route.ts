@@ -150,6 +150,8 @@ export async function POST(request: Request) {
     athleteQuestion: body?.athleteQuestion,
     healthHistory: body?.healthHistory,
     longevitySoul,
+    userId,
+    supabase,
   });
 
   const persisted = await persistLongevityRun(supabase, { userId, today, output });
