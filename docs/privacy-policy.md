@@ -2,11 +2,12 @@
 
 > **⚠️ This is a working draft, not legal advice.** It documents how the app
 > actually handles data today so a qualified attorney can turn it into a
-> binding policy. Replace the `{{PLACEHOLDERS}}` and get it reviewed before
-> relying on it for a paid product. Last updated: 2026-06-01.
+> binding policy. Operator-specific fields are filled in; get the whole
+> document reviewed before relying on it for a paid product. Last updated:
+> 2026-06-01.
 
-**Operator:** {{LEGAL_ENTITY_NAME}} ("we", "us")
-**Contact:** {{PRIVACY_CONTACT_EMAIL}}
+**Operator:** Blue Ocean Reach ("we", "us")
+**Contact:** scott@spsimpson.net
 **Service:** Performance OS — a personal training + longevity coaching app.
 
 ---
@@ -46,20 +47,21 @@ advertising or data-mining. We do not use your data to train our own models.
 
 To deliver the service we share data with these processors:
 
-- **Hosting / database:** {{HOSTING_PROVIDER}} (Vercel) and Supabase store your
-  account and health data.
+- **Hosting / database:** Vercel (application hosting) and Supabase (database +
+  auth) store your account and health data.
 - **AI provider (important):** The Coach and Longevity Guru send relevant
-  training, recovery, biomarker, and conversation data to a third-party,
-  OpenAI-compatible large-language-model API ({{LLM_PROVIDER}}) to generate
-  responses. Under that provider's API terms, data sent via the API is **not
-  used to train their models** and is retained only transiently for abuse
-  monitoring per their policy. We request this processing only after you
-  consent (see §6).
+  training, recovery, biomarker, and conversation data to **OpenAI** (via its
+  OpenAI-compatible chat-completions API) to generate responses. Per OpenAI's
+  API data-usage policy, data submitted through the API is **not used to train
+  OpenAI's models** and is retained only transiently for abuse monitoring. We
+  request this processing only after you consent (see §6).
 - **Wearable/activity providers:** Oura and Strava, via OAuth you authorize,
   to import your data.
 
-We require each processor to handle your data under their terms; we link their
-policies at {{PROCESSOR_LINKS}}.
+We require each processor to handle your data under their terms. Their privacy
+policies: OpenAI (openai.com/policies/privacy-policy), Vercel
+(vercel.com/legal/privacy-policy), Supabase (supabase.com/privacy), Oura
+(ouraring.com/privacy-policy), Strava (strava.com/legal/privacy).
 
 ## 5. Provider-specific terms
 
@@ -84,8 +86,9 @@ materially change how AI processing works, we re-request consent.
 
 - **Disconnect a source:** deletes the data we synced from that provider
   (Oura → recovery rows; Strava → workout rows) and our stored tokens.
-- **Delete your account:** removes your profile and associated data. Request via
-  {{PRIVACY_CONTACT_EMAIL}}. {{ACCOUNT_DELETION_MECHANISM}}.
+- **Delete your account:** removes your profile and associated data. Currently
+  handled manually on request via scott@spsimpson.net; a self-serve in-app
+  account deletion is planned.
 - We retain data only as long as needed to provide the service or meet legal
   obligations.
 
@@ -93,7 +96,7 @@ materially change how AI processing works, we re-request consent.
 
 Depending on your jurisdiction (e.g. GDPR/UK GDPR, CCPA/CPRA) you may have rights
 to access, correct, export, or delete your data, and to withdraw consent.
-Exercise them via {{PRIVACY_CONTACT_EMAIL}}.
+Exercise them via scott@spsimpson.net.
 
 ## 9. Security
 
@@ -103,8 +106,8 @@ secure; we cannot guarantee absolute security.
 
 ## 10. Children
 
-Not directed to anyone under {{MIN_AGE}}. We do not knowingly collect data from
-children.
+Not directed to anyone under 18. We do not knowingly collect data from anyone
+under 18.
 
 ## 11. Changes
 
@@ -122,7 +125,9 @@ consent where required.
   `POST /api/integrations/disconnect`. Strava also revokes at Strava
   (`lib/strava/deauthorize.ts`) and honors Strava's deauthorization webhook
   (`/api/webhooks/strava`).
-- **Open before this is launch-ready:** confirm the AI provider's no-train /
-  retention terms in writing and name them in §4; resolve Strava's API-agreement
-  AI-use clause; implement an in-app account-deletion mechanism (§7); legal
-  review of the whole document.
+- **Open before this is launch-ready:**
+  1. Resolve Strava's API-agreement AI-use clause — see `docs/strava-ai-use-inquiry.md`.
+  2. Confirm OpenAI's no-train / retention terms apply to your account tier in
+     writing (Enterprise/zero-retention may differ from the API default).
+  3. Implement an in-app account-deletion mechanism (§7 currently says manual).
+  4. Legal review of the whole document + your jurisdiction's requirements.
