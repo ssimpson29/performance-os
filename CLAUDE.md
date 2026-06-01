@@ -408,6 +408,21 @@ Three sections, top-to-bottom:
    and gets the `brand2` border; race week is marked. Static render
    from `view.phaseBlocks` — no client JS, no extra DB query.
 
+### Recovery view (`/recovery`)
+Real, auth-scoped dashboard (was a hardcoded preview stub until 2026-06-01).
+Data loader `app/recovery/recovery-data.ts::loadRecoveryPageState` reads
+`recovery_daily` for the signed-in athlete over a 30-day window (most-recent
+first) and returns `{ latest, days, baseline, trend }`. `latest` is the most
+recent day that actually has data (skips ring-not-worn gaps). `baseline`
+averages readiness / sleep / HRV / resting-HR over the window (nulls ignored);
+`trend` reuses `computeRecoveryTrend` over readiness. Page renders a latest
+snapshot (Readiness / Sleep / HRV / Resting HR + flag pill), the baseline +
+trend line, and a history table. Testable slice lives in the `.ts` module
+(Vitest TSX pitfall #2); `tests/recovery-data.test.ts` covers it. NOTE: this
+is the live recovery surface — `/today` shows only today's snapshot; the coach
+uses recovery contextually. Recovery data flows in via the Oura sync
+(`/api/cron/sync-oura` daily + manual `/api/sync/oura`).
+
 ### Today's Call composition (`/coach`)
 The "Today's Call" card on `/coach` is **proactively composed by the
 LLM on page load** — not the chat coach (that's reactive). Distinct
