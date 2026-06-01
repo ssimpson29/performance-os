@@ -102,10 +102,12 @@ same change.
 
 ### Scheduled jobs (Vercel Cron)
 
-`vercel.json` (repo root) registers a daily cron at `0 11 * * *` hitting
+`apps/web/vercel.json` registers a daily cron at `0 11 * * *` hitting
 `/api/cron/sync-oura` — the Oura recovery sync, since Oura has no webhook.
-Vercel picks up the schedule automatically on deploy; no dashboard step is
-needed beyond setting the env var.
+The file MUST live in `apps/web/` because the Vercel project's Root Directory
+is `apps/web` — a repo-root `vercel.json` is silently ignored and the cron
+never registers. Vercel picks up the schedule automatically on deploy; no
+dashboard step is needed beyond setting the env var.
 
 1. Set `CRON_SECRET` in the Vercel project (e.g.
    `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`).

@@ -838,7 +838,9 @@ Failure is logged and non-fatal — the next sync re-tries.
     per-user failures. `syncOuraRecovery` resolves its own date range
     from each integration's `last_synced_at`, so the first run backfills
     the whole gap in one shot.
-  - `vercel.json` (repo root) — daily cron at `0 11 * * *` hitting that
+  - `apps/web/vercel.json` (the Vercel Root Directory is `apps/web`, so the
+    cron config MUST live there — a repo-root vercel.json is silently
+    ignored) — daily cron at `0 11 * * *` hitting that
     path. (Hobby plan allows daily crons.)
   - `lib/env.ts::requireCronSecret` — `CRON_SECRET` accessor; route fails
     closed (500 unset / 401 mismatch). Vercel auto-sends the bearer when
