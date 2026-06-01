@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 
 import { loadAthleteContext } from '@/lib/agents/athlete-context';
 import { checkSpendCeiling } from '@/lib/agents/llm-usage';
+import { checkPaywallGate } from '@/lib/billing/entitlement';
 import { AI_DATA_CONSENT_VERSION, checkAiConsentGate } from '@/lib/consent/ai-consent';
 import { runTrainingCoach } from '@/lib/agents/training-coach';
 import { persistTrainingCoachRun } from '@/lib/agents/training-coach-persistence';
@@ -43,6 +44,16 @@ export async function POST(request: Request) {
 
   const supabase = createServerSupabaseClient();
   const today = new Date().toISOString().slice(0, 10);
+
+  // Paywall: the LLM coach is a premium surface (no-op unless
+  // BILLING_PAYWALL_ENABLED is on).
+  const paywall = await checkPaywallGate(supabase, userId);
+  if (!paywall.allowed) {
+    return NextResponse.json(
+      { error: 'A subscription is required to use the AI coach.', upgradeRequired: true },
+      { status: 402 },
+    );
+  }
 
   // Third-party-LLM data consent (no-op unless AI_REQUIRE_DATA_CONSENT is on).
   const consentGate = await checkAiConsentGate(supabase, userId);

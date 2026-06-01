@@ -30,6 +30,7 @@ const probes = [
   { label: 'migration 008 (user_integrations.provider strava)', table: 'user_integrations', column: 'provider' },
   { label: 'migration 011 (llm_usage)', table: 'llm_usage', column: 'est_cost_usd' },
   { label: 'migration 012 (users.ai_data_consent_at)', table: 'users', column: 'ai_data_consent_at' },
+  { label: 'migration 013 (users.subscription_status)', table: 'users', column: 'subscription_status' },
 ];
 
 for (const p of probes) {

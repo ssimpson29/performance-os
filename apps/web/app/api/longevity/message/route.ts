@@ -6,6 +6,7 @@ import {
   runLongevityChat,
 } from '@/lib/agents/longevity-chat';
 import { checkSpendCeiling } from '@/lib/agents/llm-usage';
+import { checkPaywallGate } from '@/lib/billing/entitlement';
 import { AI_DATA_CONSENT_VERSION, checkAiConsentGate } from '@/lib/consent/ai-consent';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { getAuthenticatedUserId } from '@/lib/server-auth';
@@ -48,6 +49,16 @@ export async function POST(request: Request) {
 
   const supabase = createServerSupabaseClient();
   const today = new Date().toISOString().slice(0, 10);
+
+  // Paywall: the longevity guru is a premium surface (no-op unless
+  // BILLING_PAYWALL_ENABLED is on).
+  const paywall = await checkPaywallGate(supabase, userId);
+  if (!paywall.allowed) {
+    return NextResponse.json(
+      { error: 'A subscription is required to use the Longevity Guru.', upgradeRequired: true },
+      { status: 402 },
+    );
+  }
 
   // Third-party-LLM data consent (no-op unless AI_REQUIRE_DATA_CONSENT is on).
   const consentGate = await checkAiConsentGate(supabase, userId);

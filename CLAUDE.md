@@ -196,6 +196,21 @@ reads it (migration `012`, columns on `public.users`), versioned by
   `AI_REQUIRE_DATA_CONSENT` is on — default off so current users aren't
   blocked. Mirrors the spend-ceiling pattern. Requires migration `012`.
 
+### Billing / paywall ("free basics, paid AI")
+Monetization foundation (migration `013`, columns on `public.users`).
+`lib/billing/entitlement.ts` reads subscription state and decides premium
+access; the LLM surfaces are the paid line. **Processor-agnostic** — a billing
+webhook (Stripe first; PayPal possible later) syncs `subscription_status` /
+`subscription_period_end` / `billing_*` columns; the gate just reads them.
+- `checkPaywallGate` gates `/api/coach/message` + `/api/longevity/message`
+  (402 `upgradeRequired`) ONLY when `BILLING_PAYWALL_ENABLED` is on — default
+  off. `active`/`trialing`/`past_due` grant access (past_due = dunning grace);
+  a not-yet-elapsed `subscription_period_end` also grants.
+- **Not built yet:** the Stripe Checkout + webhook that WRITES these columns,
+  a pricing/upgrade UI, and gating the other LLM entry points (todays-call,
+  longevity-eval, image-extraction). The entitlement core + chat-route gating
+  is the foundation; checkout/webhook is the next step (needs a Stripe account).
+
 ### Coach architecture (3 layers — keep separate)
 
 **Training Coach** (daily, race-driven, LLM-agent with tools):
