@@ -181,6 +181,22 @@ The system prompt gives the LLM agency rather than restricting it to "translate 
 
 **OpenAI LLM parameters.** All three agent call sites (training-coach, longevity-guru, biomarker image-extraction) use `temperature: 1` and `max_completion_tokens: 2000`. Reasoning-class models (o1, o3, gpt-5, gpt-5.5) reject `max_tokens` (must be `max_completion_tokens`) and reject temperatures other than 1. The values also work for legacy gpt-4o-class models.
 
+**LLM cost controls (don't bypass).** Two shared modules govern spend:
+- `lib/agents/llm-model.ts` — `resolveModel(surface)` is the ONLY place call
+  sites should get their model. Cheap surfaces (coach-chat, todays-call,
+  longevity-chat, longevity-eval) use `AI_COACH_MODEL`; heavy surfaces
+  (image-extraction) use `AI_COACH_MODEL_HEAVY` when set, else the default.
+  This keeps a future "upgrade to gpt-4o" from 16x-ing the whole bill instead
+  of just the surface that needs it. Do NOT read `process.env.AI_COACH_MODEL`
+  directly in a new call site — route through `resolveModel`.
+- `maxToolIterations()` (default 5, env `AI_COACH_MAX_TOOL_ITERATIONS`) caps the
+  tool-loop round-trips in training-coach + longevity-chat so a misbehaving
+  loop can't run away on tokens.
+- `lib/agents/llm-usage.ts` — `createUsageTracker()` + `logLlmUsage()` emit one
+  structured `[llm-usage]` line per agent run (surface, userId, model, tokens,
+  est USD). Wired into the two tool loops; grep `[llm-usage]` for per-user
+  spend. New LLM surfaces should adopt the same tracker + log.
+
 **Longevity Guru** (strategic, healthspan-driven):
 1. **Deterministic engine** — `apps/web/lib/longevity/{reference-ranges,trend-detection,prioritization}.ts`
 2. **Athlete-scoped data loader** — `apps/web/app/longevity/longevity-data.ts`

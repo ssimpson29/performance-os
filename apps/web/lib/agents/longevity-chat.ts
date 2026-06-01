@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { buildSystemPrompt as buildBaseLongevityPrompt } from './longevity-guru';
+import { maxToolIterations, resolveModel } from './llm-model';
+import { createUsageTracker, logLlmUsage, type RawUsage } from './llm-usage';
 import {
   createSoulUpdatedRef,
   executeLongevityTool,
@@ -74,7 +76,7 @@ type LlmEnv = { apiKey: string; model: string; baseUrl: string };
 
 function readLlmEnv(): LlmEnv | null {
   const apiKey = process.env.AI_COACH_API_KEY;
-  const model = process.env.AI_COACH_MODEL;
+  const model = resolveModel('longevity-chat');
   const baseUrl = process.env.AI_COACH_BASE_URL;
   if (!apiKey || !model || !baseUrl) return null;
   return { apiKey, model, baseUrl: baseUrl.replace(/\/$/, '') };
@@ -101,9 +103,9 @@ type OpenAICompletion = {
     };
     finish_reason?: string;
   }>;
+  usage?: RawUsage;
 };
 
-const MAX_ITERATIONS = 8;
 const LLM_TIMEOUT_MS = 30_000;
 
 async function callLlmChatCompletion(
@@ -214,14 +216,21 @@ async function runAgentLoop(
     });
   }
 
-  for (let iter = 0; iter < MAX_ITERATIONS; iter += 1) {
+  // Single exit so usage logs on every path. maxToolIterations() caps spend.
+  const tracker = createUsageTracker();
+  const maxIterations = maxToolIterations();
+  let result: { message: string | null; trace: LongevityChatToolTraceEntry[] } = { message: null, trace };
+
+  for (let iter = 0; iter < maxIterations; iter += 1) {
+    tracker.addIteration();
     const completion = await callLlmChatCompletion(env, messages);
-    if (!completion) return { message: null, trace };
+    if (!completion) break;
+    tracker.add(completion.usage);
     const choice = completion.choices?.[0];
     const assistantMessage = choice?.message;
     if (!assistantMessage) {
       console.error('[longevity-chat] LLM returned no message.choices[0].message');
-      return { message: null, trace };
+      break;
     }
     const toolCalls = assistantMessage.tool_calls;
     if (toolCalls && toolCalls.length > 0) {
@@ -233,26 +242,31 @@ async function runAgentLoop(
       for (const call of toolCalls) {
         const name = call.function?.name ?? '';
         const args = call.function?.arguments ?? '{}';
-        const result = await executeLongevityTool(name, args, handlerContext);
+        const toolResult = await executeLongevityTool(name, args, handlerContext);
         trace.push({
           iteration: iter,
           toolName: name,
           argsPreview: clipPreview(args, 240),
-          resultPreview: clipPreview(result, 400),
+          resultPreview: clipPreview(toolResult, 400),
         });
-        messages.push({ role: 'tool', tool_call_id: call.id, content: result });
+        messages.push({ role: 'tool', tool_call_id: call.id, content: toolResult });
       }
       continue;
     }
     const text = assistantMessage.content?.trim() ?? '';
     if (!text) {
       console.error('[longevity-chat] LLM returned empty content with no tool_calls');
-      return { message: null, trace };
+      break;
     }
-    return { message: text, trace };
+    result = { message: text, trace };
+    break;
   }
-  console.error(`[longevity-chat] agent loop exceeded ${MAX_ITERATIONS} iterations`);
-  return { message: null, trace };
+
+  if (result.message === null && tracker.iterations >= maxIterations) {
+    console.error(`[longevity-chat] agent loop hit the ${maxIterations}-iteration cap`);
+  }
+  logLlmUsage({ userId: ctx.userId, surface: 'longevity-chat', model: env.model, tracker });
+  return result;
 }
 
 // ---------------------------------------------------------------------------

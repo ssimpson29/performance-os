@@ -21,6 +21,8 @@ import {
   type TrainingLoadSummary,
 } from '@/lib/training-plan/training-load-summary';
 
+import { resolveModel } from './llm-model';
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -242,7 +244,7 @@ type LlmEnv = { apiKey: string; model: string; baseUrl: string };
 
 function readLlmEnv(): LlmEnv | null {
   const apiKey = process.env.AI_COACH_API_KEY;
-  const model = process.env.AI_COACH_MODEL;
+  const model = resolveModel('longevity-eval');
   const baseUrl = process.env.AI_COACH_BASE_URL;
   if (!apiKey || !model || !baseUrl) return null;
   return { apiKey, model, baseUrl: baseUrl.replace(/\/$/, '') };

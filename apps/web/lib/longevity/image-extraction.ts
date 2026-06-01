@@ -11,6 +11,8 @@
  * maps to our canonical keys.
  */
 
+import { resolveModel } from '@/lib/agents/llm-model';
+
 import { REFERENCE_CATALOG } from './reference-ranges';
 
 export type ExtractedBiomarker = {
@@ -34,7 +36,7 @@ type LlmEnv = { apiKey: string; model: string; baseUrl: string };
 
 function readLlmEnv(): LlmEnv | null {
   const apiKey = process.env.AI_COACH_API_KEY;
-  const model = process.env.AI_COACH_MODEL;
+  const model = resolveModel('image-extraction');
   const baseUrl = process.env.AI_COACH_BASE_URL;
   if (!apiKey || !model || !baseUrl) return null;
   return { apiKey, model, baseUrl: baseUrl.replace(/\/$/, '') };

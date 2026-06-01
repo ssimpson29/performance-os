@@ -10,6 +10,8 @@ import {
   executeCoachTool,
   type ToolHandlerContext,
 } from './coach-tools';
+import { maxToolIterations, resolveModel } from './llm-model';
+import { createUsageTracker, logLlmUsage, type RawUsage } from './llm-usage';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -397,7 +399,7 @@ type LlmEnv = { apiKey: string; model: string; baseUrl: string };
 
 function readLlmEnv(): LlmEnv | null {
   const apiKey = process.env.AI_COACH_API_KEY;
-  const model = process.env.AI_COACH_MODEL;
+  const model = resolveModel('coach-chat');
   const baseUrl = process.env.AI_COACH_BASE_URL;
   if (!apiKey || !model || !baseUrl) return null;
   return { apiKey, model, baseUrl: baseUrl.replace(/\/$/, '') };
@@ -424,9 +426,9 @@ type OpenAICompletion = {
     };
     finish_reason?: string;
   }>;
+  usage?: RawUsage;
 };
 
-const MAX_ITERATIONS = 8;
 const LLM_TIMEOUT_MS = 30_000;
 
 async function callLlmChatCompletion(
@@ -511,16 +513,27 @@ async function runAgentLoop(
     });
   }
 
-  for (let iter = 0; iter < MAX_ITERATIONS; iter += 1) {
+  // Single exit so usage is logged on every path (success, LLM failure,
+  // loop-exhausted). maxToolIterations() bounds worst-case token spend.
+  const tracker = createUsageTracker();
+  const maxIterations = maxToolIterations();
+  let result: { message: string | null; trace: CoachToolTraceEntry[]; planCommitted: boolean } = {
+    message: null,
+    trace,
+    planCommitted,
+  };
+
+  for (let iter = 0; iter < maxIterations; iter += 1) {
+    tracker.addIteration();
     const completion = await callLlmChatCompletion(env, messages);
-    if (!completion) {
-      return { message: null, trace, planCommitted };
-    }
+    if (!completion) break;
+    tracker.add(completion.usage);
+
     const choice = completion.choices?.[0];
     const assistantMessage = choice?.message;
     if (!assistantMessage) {
       console.error('[training-coach] LLM returned no message.choices[0].message');
-      return { message: null, trace, planCommitted };
+      break;
     }
 
     // Did the model ask to call tools? If so, execute and feed back.
@@ -534,26 +547,22 @@ async function runAgentLoop(
       for (const call of toolCalls) {
         const name = call.function?.name ?? '';
         const args = call.function?.arguments ?? '{}';
-        const result = await executeCoachTool(name, args, toolHandlerContext);
+        const toolResult = await executeCoachTool(name, args, toolHandlerContext);
         trace.push({
           iteration: iter,
           toolName: name,
           argsPreview: clipPreview(args, 240),
-          resultPreview: clipPreview(result, 400),
+          resultPreview: clipPreview(toolResult, 400),
         });
         if (name === 'commitTrainingPlan') {
           try {
-            const parsed = JSON.parse(result) as { ok?: boolean };
+            const parsed = JSON.parse(toolResult) as { ok?: boolean };
             if (parsed.ok) planCommitted = true;
           } catch {
             // ignore parse error — the LLM will see the raw result anyway
           }
         }
-        messages.push({
-          role: 'tool',
-          tool_call_id: call.id,
-          content: result,
-        });
+        messages.push({ role: 'tool', tool_call_id: call.id, content: toolResult });
       }
       continue; // Loop back so the LLM can respond to the tool results.
     }
@@ -562,13 +571,19 @@ async function runAgentLoop(
     const text = assistantMessage.content?.trim() ?? '';
     if (!text) {
       console.error('[training-coach] LLM returned empty assistant content with no tool_calls.');
-      return { message: null, trace, planCommitted };
+      break;
     }
-    return { message: text, trace, planCommitted };
+    result = { message: text, trace, planCommitted };
+    break;
   }
 
-  console.error(`[training-coach] Agent loop exceeded ${MAX_ITERATIONS} iterations without producing a final reply.`);
-  return { message: null, trace, planCommitted };
+  if (result.message === null && tracker.iterations >= maxIterations) {
+    console.error(`[training-coach] Agent loop hit the ${maxIterations}-iteration cap without a final reply.`);
+  }
+  // planCommitted may have flipped after `result` was initialized; keep it fresh.
+  result.planCommitted = planCommitted;
+  logLlmUsage({ userId: ctx.userId, surface: 'coach-chat', model: env.model, tracker });
+  return result;
 }
 
 // ---------------------------------------------------------------------------
