@@ -177,8 +177,20 @@ Athlete-scoped, idempotent. UI: `DisconnectIntegrationButton` (two-step
 confirm) on the Oura + Strava cards. **Known gaps (follow-ups):** (1) a Strava
 description forwarded onto a canonical Apple workout row isn't scrubbed (no
 per-field provenance); (2) we don't yet revoke the token at the provider
-(Strava deauthorize) or handle Strava's deauthorization webhook; (3) consent
-capture for third-party-LLM data sharing is still TODO (see monetization #2).
+(Strava deauthorize) or handle Strava's deauthorization webhook.
+
+### Third-party-LLM data consent (#2 part B)
+The agents send wearable/lab/health data to an OpenAI-compatible API; Apple
+HealthKit (5.1.3) + the wearable providers require disclosed consent before
+sharing health data with a third party. `lib/consent/ai-consent.ts` records +
+reads it (migration `012`, columns on `public.users`), versioned by
+`AI_DATA_CONSENT_VERSION` (bump → prior consent no longer counts).
+- `POST/GET /api/consent/ai-data` (auth-scoped) record/read consent.
+- `AiConsentCard` on `/settings/integrations` shows the disclosure + captures it.
+- **Opt-in enforcement.** `checkAiConsentGate` gates `/api/coach/message` +
+  `/api/longevity/message` (403 `consentRequired`) ONLY when
+  `AI_REQUIRE_DATA_CONSENT` is on — default off so current users aren't
+  blocked. Mirrors the spend-ceiling pattern. Requires migration `012`.
 
 ### Coach architecture (3 layers — keep separate)
 

@@ -6,6 +6,7 @@ import {
   runLongevityChat,
 } from '@/lib/agents/longevity-chat';
 import { checkSpendCeiling } from '@/lib/agents/llm-usage';
+import { AI_DATA_CONSENT_VERSION, checkAiConsentGate } from '@/lib/consent/ai-consent';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { getAuthenticatedUserId } from '@/lib/server-auth';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
@@ -47,6 +48,15 @@ export async function POST(request: Request) {
 
   const supabase = createServerSupabaseClient();
   const today = new Date().toISOString().slice(0, 10);
+
+  // Third-party-LLM data consent (no-op unless AI_REQUIRE_DATA_CONSENT is on).
+  const consentGate = await checkAiConsentGate(supabase, userId);
+  if (!consentGate.allowed) {
+    return NextResponse.json(
+      { error: 'AI data-processing consent required.', consentRequired: true, consentVersion: AI_DATA_CONSENT_VERSION },
+      { status: 403 },
+    );
+  }
 
   // Daily spend ceiling (no-op unless AI_COACH_DAILY_USD_CEILING is set).
   const ceiling = await checkSpendCeiling(supabase, userId);

@@ -1,5 +1,6 @@
 import { PageHero } from '@/components/layout/page-hero';
 import { Card } from '@/components/ui/card';
+import { AiConsentCard } from '@/components/integrations/ai-consent-card';
 import { OuraUserBindingCard } from '@/components/integrations/oura-user-binding-card';
 import { SignInCard } from '@/components/integrations/sign-in-card';
 import { StravaCard, type StravaIntegrationState } from '@/components/integrations/strava-card';
@@ -75,6 +76,11 @@ export default async function IntegrationsPage() {
             <SignInCard />
           </div>
         )}
+        {currentUser ? (
+          <div className="md:col-span-2">
+            <AiConsentCard />
+          </div>
+        ) : null}
         <Card className="space-y-4 md:col-span-2">
           <div className="flex items-center justify-between gap-3">
             <div>
