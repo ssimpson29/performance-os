@@ -1,5 +1,6 @@
 import * as React from 'react';
 
+import { DisconnectIntegrationButton } from './disconnect-integration-button';
 import { RegisterStravaWebhookButton } from './register-strava-webhook-button';
 import { SyncStravaButton } from './sync-strava-button';
 
@@ -85,6 +86,7 @@ export function StravaCard({ state }: { state: StravaIntegrationState }) {
           { key: 'panel-actions', className: 'mt-4 flex flex-wrap items-center gap-3' },
           React.createElement(SyncStravaButton, { key: 'sync-btn' }),
           React.createElement(RegisterStravaWebhookButton, { key: 'register-webhook-btn' }),
+          React.createElement(DisconnectIntegrationButton, { key: 'disconnect-btn', provider: 'strava', label: 'Strava' }),
           React.createElement(
             'a',
             {

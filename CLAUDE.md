@@ -130,6 +130,7 @@ npm run test --workspace @performance-os/web   # vitest run
   - `POST /api/longevity/evaluate`
   - `POST /api/imports/biomarker-panel`
   - `POST /api/imports/biomarker-panel-image`
+  - `POST /api/integrations/disconnect`
 - **Intentional exceptions:**
   - `POST /api/imports/apple-health/push` uses signed URL + HMAC
     signature for iPhone Shortcut automation. Do NOT convert to cookie
@@ -163,6 +164,21 @@ npm run test --workspace @performance-os/web   # vitest run
     the system, not as an athlete.
 - Two athletes signed into the same deployment must never read or
   write each other's data through browser flows.
+
+### Integration disconnect = data deletion (provider-terms compliance)
+`POST /api/integrations/disconnect` (`{ provider: 'oura' | 'strava' }`) →
+`lib/integrations/disconnect.ts::disconnectIntegration`. Disconnecting must
+DELETE the provider's data, not just drop the token (Strava's 2024 terms
+require a third party to stop retaining provider data on disconnect):
+- oura → deletes `recovery_daily` where `source='oura'`,
+- strava → deletes `workouts` where `source='strava'`,
+- both → delete the provider's `sync_runs` + the `user_integrations` row.
+Athlete-scoped, idempotent. UI: `DisconnectIntegrationButton` (two-step
+confirm) on the Oura + Strava cards. **Known gaps (follow-ups):** (1) a Strava
+description forwarded onto a canonical Apple workout row isn't scrubbed (no
+per-field provenance); (2) we don't yet revoke the token at the provider
+(Strava deauthorize) or handle Strava's deauthorization webhook; (3) consent
+capture for third-party-LLM data sharing is still TODO (see monetization #2).
 
 ### Coach architecture (3 layers — keep separate)
 

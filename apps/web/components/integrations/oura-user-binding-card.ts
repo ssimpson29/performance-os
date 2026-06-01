@@ -1,5 +1,7 @@
 import * as React from 'react';
 
+import { DisconnectIntegrationButton } from './disconnect-integration-button';
+
 export type OuraBindingUser = {
   id: string;
   email: string;
@@ -38,6 +40,11 @@ export function OuraUserBindingCard({ currentUser }: { currentUser: OuraBindingU
           className: 'mt-4 inline-flex rounded-full bg-brand2 px-4 py-2 text-sm font-medium text-black',
         },
         'Connect Oura',
+      ),
+      React.createElement(
+        'div',
+        { className: 'mt-4 border-t border-white/5 pt-4' },
+        React.createElement(DisconnectIntegrationButton, { provider: 'oura', label: 'Oura' }),
       ),
     ),
   );

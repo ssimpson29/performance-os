@@ -1,6 +1,13 @@
 import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// The card imports a client-only button ('use client' + useRouter) that can't
+// render under renderToStaticMarkup; stub it so this server-render test stays
+// focused on the card's own markup.
+vi.mock('../components/integrations/disconnect-integration-button', () => ({
+  DisconnectIntegrationButton: () => null,
+}));
 
 import { OuraUserBindingCard } from '../components/integrations/oura-user-binding-card';
 
